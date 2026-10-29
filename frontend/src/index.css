@@ -1,0 +1,103 @@
+/* ── Google Fonts: DM Serif Display + DM Sans ────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── CSS custom properties (design tokens) ───────────────────── */
+:root {
+  --espresso:      #2B1B14;
+  --cream:         #FBF6EE;
+  --paper:         #FFFFFF;
+  --terracotta:    #E8590C;
+  --terra-dark:    #C2410C;
+  --caramel:       #C98B4B;
+  --matcha:        #4F7F4A;
+  --chili:         #C0392B;
+  --ink:           #1F1611;
+  --muted:         #7A6A5F;
+  --line:          #EADFD0;
+  --shadow-rest:   0 1px 4px rgba(43,27,20,0.08), 0 1px 2px rgba(43,27,20,0.04);
+  --shadow-raised: 0 4px 16px rgba(43,27,20,0.12), 0 2px 6px rgba(43,27,20,0.06);
+}
+
+/* ── Root height (full-screen POS layout) ────────────────────── */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'DM Sans', 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 17px;
+  background-color: var(--cream);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Tabular numerals everywhere money / counts are shown ─────── */
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* ── Scrollbar utilities ──────────────────────────────────────── */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar { display: none; }
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.scrollbar-thin::-webkit-scrollbar { width: 4px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
+
+/* ── Focus ring (terracotta, 3px) ─────────────────────────────── */
+:focus-visible {
+  outline: 3px solid var(--terracotta);
+  outline-offset: 2px;
+}
+
+/* ── Reduced motion ──────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Press scale on interactive elements ────────────────────── */
+.press:active { transform: scale(0.98); }
+
+/* ── Skeleton shimmer ────────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px  0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--line) 25%, #f7f0e6 50%, var(--line) 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: 8px;
+}
+
+/* ── Thermal print (80mm / 58mm) ─────────────────────────────── */
+@media print {
+  body * { visibility: hidden; }
+  .print-receipt, .print-receipt * { visibility: visible; }
+  .print-receipt {
+    position: absolute; left: 0; top: 0;
+    width: 80mm; font-size: 11px; color: #000;
+  }
+  .print-receipt.print-58mm { width: 58mm; }
+  .no-print { display: none !important; }
+}
+
+/* ── A4 print ────────────────────────────────────────────────── */
+@media print and (min-width: 210mm) {
+  .print-a4 { position: absolute; left: 0; top: 0; width: 210mm; }
+}

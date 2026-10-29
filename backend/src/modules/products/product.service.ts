@@ -236,7 +236,7 @@ export async function updateProduct(params: UpdateProductParams) {
 
   for (const field of fields) {
     const [paramName, colName] = field.includes(':') ? field.split(':') : [field, field];
-    const val = (params as Record<string, unknown>)[paramName];
+    const val = (params as unknown as Record<string, unknown>)[paramName];
     if (val !== undefined) {
       updates.push(`${colName} = $${idx++}`);
       values.push(val);

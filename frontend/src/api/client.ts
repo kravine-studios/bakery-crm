@@ -1,7 +1,14 @@
 import axios from 'axios';
 
+// In production, set VITE_API_URL to your backend URL, e.g. https://bakery-crm-api.railway.app
+// In development, Vite's proxy forwards /api → localhost:4000 so VITE_API_URL is not needed.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const apiBaseURL: string = (import.meta as any).env.VITE_API_URL
+  ? `${(import.meta as any).env.VITE_API_URL}/api`
+  : '/api';
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: apiBaseURL,
   headers: { 'Content-Type': 'application/json' },
 });
 
@@ -28,7 +35,7 @@ api.interceptors.response.use(
       const refreshToken = localStorage.getItem('refreshToken');
       if (refreshToken) {
         try {
-          const res = await axios.post('/api/auth/refresh', { refreshToken });
+          const res = await axios.post(`${apiBaseURL}/auth/refresh`, { refreshToken });
           const { accessToken } = res.data;
           localStorage.setItem('accessToken', accessToken);
           originalRequest.headers.Authorization = `Bearer ${accessToken}`;

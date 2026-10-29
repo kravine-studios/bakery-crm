@@ -25,7 +25,7 @@ export const authenticate = asyncHandler(async (req: Request, res: Response, nex
 
   const token = header.slice(7);
   try {
-    const decoded = jwt.verify(token, env.jwt.secret) as JwtPayload;
+    const decoded = jwt.verify(token, env.jwt.secret) as unknown as JwtPayload;
     req.user = {
       id: decoded.sub,
       username: decoded.username,
@@ -47,7 +47,7 @@ export const optionalAuth = asyncHandler(async (req: Request, res: Response, nex
   const header = req.headers.authorization;
   if (header && header.startsWith('Bearer ')) {
     try {
-      const decoded = jwt.verify(header.slice(7), env.jwt.secret) as JwtPayload;
+      const decoded = jwt.verify(header.slice(7), env.jwt.secret) as unknown as JwtPayload;
       req.user = {
         id: decoded.sub,
         username: decoded.username,

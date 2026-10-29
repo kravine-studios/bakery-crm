@@ -123,7 +123,7 @@ export async function pinLogin(pin: string, req: Request) {
 
 export function refreshToken(token: string) {
   try {
-    const decoded = jwt.verify(token, env.jwt.refreshSecret) as {
+    const decoded = jwt.verify(token, env.jwt.refreshSecret) as unknown as {
       sub: number;
       username: string;
       role: Role;

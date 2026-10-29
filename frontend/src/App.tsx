@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
 import { authApi } from '@/api';
+import { IS_DEMO } from '@/api/client';
 import ProtectedRoute from '@/components/common/ProtectedRoute';
 import Layout from '@/components/layout/Layout';
 import PageShell from '@/components/common/PageShell';
@@ -44,6 +45,20 @@ export default function App() {
       setHydrating(false);
       return;
     }
+
+    // In demo mode the token is a local placeholder — no backend exists to call.
+    // Rehydrate the user directly from the mock store instead of calling /me.
+    if (IS_DEMO) {
+      authApi.me()
+        .then((res) => {
+          const u = res.data?.user ?? res.data;
+          if (u?.id) setUser(u);
+          else setHydrating(false);
+        })
+        .catch(() => setHydrating(false));
+      return;
+    }
+
     authApi.me()
       .then((res) => {
         // /me returns { user: { ... } } or the user directly depending on mock

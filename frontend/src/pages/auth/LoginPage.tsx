@@ -1,8 +1,13 @@
 import { useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CakeSlice, LogIn } from 'lucide-react';
+import { CakeSlice, LogIn, FlaskConical } from 'lucide-react';
 import { authApi } from '@/api';
+import { IS_DEMO } from '@/api/client';
 import { useAuthStore } from '@/store/authStore';
+
+/** Demo credentials accepted in demo mode */
+const DEMO_USERNAME = 'admin';
+const DEMO_PASSWORD = 'demo123';
 
 export default function LoginPage() {
   const navigate    = useNavigate();
@@ -70,6 +75,23 @@ export default function LoginPage() {
           <p className="mt-1" style={{ fontSize: '16px', color: '#7A6A5F' }}>
             Sign in to your account
           </p>
+
+          {/* Demo mode notice — only shown when VITE_DEMO_MODE=true */}
+          {IS_DEMO && (
+            <div
+              className="mx-auto mt-3 flex items-center justify-center gap-1.5 rounded-pill px-3 py-1"
+              style={{
+                background: '#FFF1DC',
+                border: '1px solid #F5C88A',
+                display: 'inline-flex',
+              }}
+            >
+              <FlaskConical size={14} color="#D9822B" strokeWidth={2} />
+              <span style={{ fontSize: '13px', fontWeight: 600, color: '#D9822B' }}>
+                PROTOTYPE DEMO — no real data
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Mode toggle */}
@@ -198,10 +220,31 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <p className="mt-6 text-center" style={{ fontSize: '14px', color: '#7A6A5F' }}>
-          Default admin:{' '}
-          <span className="font-mono" style={{ color: '#1F1611' }}>admin / admin123</span>
-        </p>
+        {IS_DEMO ? (
+          /* Demo mode: show the exact credentials to use */
+          <div
+            className="mt-6 rounded-btn px-4 py-3 text-center"
+            style={{ background: '#FFF1DC', border: '1px solid #F5C88A' }}
+          >
+            <p style={{ fontSize: '13px', fontWeight: 600, color: '#D9822B', marginBottom: 4 }}>
+              Demo login credentials
+            </p>
+            <p style={{ fontSize: '14px', color: '#1F1611', margin: 0 }}>
+              Username:{' '}
+              <span className="font-mono font-bold">{DEMO_USERNAME}</span>
+              {'   '}Password:{' '}
+              <span className="font-mono font-bold">{DEMO_PASSWORD}</span>
+            </p>
+            <p style={{ fontSize: '12px', color: '#7A6A5F', marginTop: 6 }}>
+              All data shown is sample data. Nothing is saved.
+            </p>
+          </div>
+        ) : (
+          <p className="mt-6 text-center" style={{ fontSize: '14px', color: '#7A6A5F' }}>
+            Default admin:{' '}
+            <span className="font-mono" style={{ color: '#1F1611' }}>admin / admin123</span>
+          </p>
+        )}
       </div>
     </div>
   );

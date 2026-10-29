@@ -64,3 +64,13 @@ export function mockResponse<T>(data: T, delayMs = 200): Promise<{ data: T }> {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const IS_MOCK = (import.meta as any).env.VITE_MOCK === 'true';
+
+/**
+ * DEMO MODE — frontend-only prototype mode, no backend required.
+ * Enabled by setting VITE_DEMO_MODE=true as a Vercel environment variable.
+ * When active, login accepts any password for the demo credentials,
+ * all API calls return mock data, and a "Demo" banner is shown in the UI.
+ * Real authentication is NEVER bypassed when this flag is false.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const IS_DEMO = (import.meta as any).env.VITE_DEMO_MODE === 'true';

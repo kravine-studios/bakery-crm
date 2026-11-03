@@ -1,90 +1,116 @@
 import { Request, Response } from 'express';
-import { body, query } from 'express-validator';
+import { body, param } from 'express-validator';
 import { asyncHandler } from '../../utils/asyncHandler';
-import { validate } from '../../middleware/validate';
-import { Role } from '../../types/enums';
+import { validate }     from '../../middleware/validate';
+import { authorize }    from '../../middleware/rbac';
+import { Role }         from '../../types/enums';
 import {
-  listUsers, getUserById, createUser, updateUser, resetPassword, deactivateUser,
+  listUsers, getUserById, createUser, updateUser,
+  resetPassword, deactivateUser, activateUser, unlockUser,
 } from './user.service';
+
+// ── Admin-only guard middleware ───────────────────────────────────────────────
+const adminOnly = authorize(Role.Admin);
+
+// ── Validation chains ─────────────────────────────────────────────────────────
 
 export const createUserValidation = [
   body('username').isString().trim().isLength({ min: 3 }).withMessage('Username must be at least 3 characters'),
-  body('password').isString().isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
-  body('role').isIn(['admin', 'manager', 'cashier']).withMessage('Invalid role'),
+  body('password').isString().isLength({ min: 10 }).withMessage('Password must be at least 10 characters'),
+  body('role').isIn([Role.Manager, Role.Cashier]).withMessage('Role must be manager or cashier (admin cannot be created here)'),
   body('displayName').isString().trim().notEmpty().withMessage('Display name is required'),
-  body('pin').optional().isString().isLength({ min: 4, max: 6 }),
   body('discountLimit').optional().isFloat({ min: 0 }),
   validate,
 ];
 
 export const updateUserValidation = [
   body('displayName').optional().isString().trim().notEmpty(),
-  body('pin').optional().isString().isLength({ min: 4, max: 6 }),
   body('discountLimit').optional().isFloat({ min: 0 }),
-  body('role').optional().isIn(['admin', 'manager', 'cashier']),
+  body('isActive').optional().isBoolean(),
   validate,
 ];
 
 export const resetPasswordValidation = [
-  body('newPassword').isString().isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+  // null means "generate"
+  body('newPassword').optional({ nullable: true }).isString().isLength({ min: 10 }),
   validate,
 ];
 
-export const deactivateValidation = [
-  body('reason').isString().trim().notEmpty().withMessage('Reason is required'),
-  validate,
-];
+// ── Controller ────────────────────────────────────────────────────────────────
 
 export const userController = {
   list: asyncHandler(async (req: Request, res: Response) => {
     const includeInactive = req.query.includeInactive === 'true';
-    const users = await listUsers(includeInactive);
+    const requestingRole  = req.user!.role;
+    const users = await listUsers(includeInactive, requestingRole);
     res.json(users);
   }),
 
   getById: asyncHandler(async (req: Request, res: Response) => {
-    const user = await getUserById(parseInt(req.params.id, 10));
+    const user = await getUserById(parseInt(req.params.id, 10), req.user!.role);
     res.json(user);
   }),
 
-  create: asyncHandler(async (req: Request, res: Response) => {
-    if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
-    const user = await createUser({
-      username: req.body.username,
-      password: req.body.password,
-      role: req.body.role as Role,
-      displayName: req.body.displayName,
-      pin: req.body.pin,
-      discountLimit: req.body.discountLimit,
-      createdBy: req.user.id,
-      req,
-    });
-    res.status(201).json(user);
-  }),
+  create: [
+    adminOnly,
+    ...createUserValidation,
+    asyncHandler(async (req: Request, res: Response) => {
+      const user = await createUser({ ...req.body, createdBy: req.user!.id, req });
+      res.status(201).json(user);
+    }),
+  ],
 
-  update: asyncHandler(async (req: Request, res: Response) => {
-    if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
-    const user = await updateUser({
-      id: parseInt(req.params.id, 10),
-      displayName: req.body.displayName,
-      pin: req.body.pin,
-      discountLimit: req.body.discountLimit,
-      role: req.body.role as Role,
-      updatedBy: req.user.id,
-      req,
-    });
-    res.json(user);
-  }),
+  update: [
+    adminOnly,
+    ...updateUserValidation,
+    asyncHandler(async (req: Request, res: Response) => {
+      const user = await updateUser({
+        ...req.body,
+        id:        parseInt(req.params.id, 10),
+        updatedBy: req.user!.id,
+        req,
+      });
+      res.json(user);
+    }),
+  ],
 
-  resetPassword: asyncHandler(async (req: Request, res: Response) => {
-    if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
-    await resetPassword(parseInt(req.params.id, 10), req.body.newPassword, req.user.id, req);
-    res.json({ message: 'Password reset successfully' });
-  }),
+  resetPassword: [
+    adminOnly,
+    ...resetPasswordValidation,
+    asyncHandler(async (req: Request, res: Response) => {
+      const result = await resetPassword(
+        parseInt(req.params.id, 10),
+        req.body.newPassword ?? null,
+        req.user!.id,
+        req
+      );
+      // If generated, return it ONCE. The caller must show it then discard.
+      res.json({ message: 'Password reset', ...result });
+    }),
+  ],
 
-  deactivate: asyncHandler(async (req: Request, res: Response) => {
-    if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
-    await deactivateUser(parseInt(req.params.id, 10), req.body.reason, req.user.id, req);
-    res.json({ message: 'User deactivated' });
-  }),
+  deactivate: [
+    adminOnly,
+    asyncHandler(async (req: Request, res: Response) => {
+      const reason = req.body.reason ?? 'Deactivated by admin';
+      await deactivateUser(parseInt(req.params.id, 10), reason, req.user!.id, req);
+      res.json({ message: 'User deactivated' });
+    }),
+  ],
+
+  activate: [
+    adminOnly,
+    asyncHandler(async (req: Request, res: Response) => {
+      await activateUser(parseInt(req.params.id, 10), req.user!.id, req);
+      res.json({ message: 'User activated' });
+    }),
+  ],
+
+  unlock: [
+    adminOnly,
+    asyncHandler(async (req: Request, res: Response) => {
+      await unlockUser(parseInt(req.params.id, 10), req.user!.id, req);
+      res.json({ message: 'User unlocked' });
+    }),
+  ],
 };

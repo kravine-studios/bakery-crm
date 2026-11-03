@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
 import type { Role } from '@/store/authStore';
@@ -8,6 +8,7 @@ import {
   Wallet, Banknote, BarChart3, UserCog, Settings, LogOut,
   CakeSlice, Menu, X,
 } from 'lucide-react';
+import { settingsApi } from '@/api';
 
 // ─── Nav definition ───────────────────────────────────────────────────────────
 
@@ -17,6 +18,7 @@ type NavEntry = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   Icon: any;
   roles: Role[];
+  permKey: string;
 };
 
 type NavGroup = {
@@ -28,36 +30,36 @@ const NAV_GROUPS: NavGroup[] = [
   {
     title: 'SALES',
     items: [
-      { path: '/dashboard', label: 'Dashboard',  Icon: LayoutDashboard, roles: ['admin','manager','cashier'] },
-      { path: '/billing',   label: 'Billing',    Icon: ReceiptText,     roles: ['admin','manager','cashier'] },
-      { path: '/orders',    label: 'Orders',     Icon: ClipboardList,   roles: ['admin','manager','cashier'] },
-      { path: '/customers', label: 'Customers',  Icon: Users,           roles: ['admin','manager','cashier'] },
+      { path: '/dashboard', label: 'Dashboard',  Icon: LayoutDashboard, roles: ['admin','manager','cashier'], permKey: 'dashboard' },
+      { path: '/billing',   label: 'Billing',    Icon: ReceiptText,     roles: ['admin','manager','cashier'], permKey: 'billing' },
+      { path: '/orders',    label: 'Orders',     Icon: ClipboardList,   roles: ['admin','manager','cashier'], permKey: 'orders' },
+      { path: '/customers', label: 'Customers',  Icon: Users,           roles: ['admin','manager','cashier'], permKey: 'customers' },
     ],
   },
   {
     title: 'STOCK',
     items: [
-      { path: '/products',      label: 'Products',      Icon: Package,    roles: ['admin','manager'] },
-      { path: '/suppliers',     label: 'Suppliers',     Icon: Truck,      roles: ['admin','manager'] },
-      { path: '/purchases',     label: 'Purchases',     Icon: ShoppingCart, roles: ['admin','manager'] },
-      { path: '/raw-materials', label: 'Raw Materials', Icon: CakeSlice,  roles: ['admin','manager'] },
-      { path: '/production',    label: 'Production',    Icon: ChefHat,    roles: ['admin','manager'] },
-      { path: '/stock',         label: 'Stock',         Icon: Boxes,      roles: ['admin','manager'] },
+      { path: '/products',      label: 'Products',      Icon: Package,    roles: ['admin','manager'], permKey: 'products' },
+      { path: '/suppliers',     label: 'Suppliers',     Icon: Truck,      roles: ['admin','manager'], permKey: 'suppliers' },
+      { path: '/purchases',     label: 'Purchases',     Icon: ShoppingCart, roles: ['admin','manager'], permKey: 'purchases' },
+      { path: '/raw-materials', label: 'Raw Materials', Icon: CakeSlice,  roles: ['admin','manager'], permKey: 'rawMaterials' },
+      { path: '/production',    label: 'Production',    Icon: ChefHat,    roles: ['admin','manager'], permKey: 'production' },
+      { path: '/stock',         label: 'Stock',         Icon: Boxes,      roles: ['admin','manager'], permKey: 'stock' },
     ],
   },
   {
     title: 'MONEY',
     items: [
-      { path: '/shifts',   label: 'Shifts',   Icon: Wallet,  roles: ['admin','manager','cashier'] },
-      { path: '/expenses', label: 'Expenses', Icon: Banknote, roles: ['admin','manager'] },
-      { path: '/reports',  label: 'Reports',  Icon: BarChart3, roles: ['admin','manager'] },
+      { path: '/shifts',   label: 'Shifts',   Icon: Wallet,  roles: ['admin','manager','cashier'], permKey: 'shifts' },
+      { path: '/expenses', label: 'Expenses', Icon: Banknote, roles: ['admin','manager'], permKey: 'expenses' },
+      { path: '/reports',  label: 'Reports',  Icon: BarChart3, roles: ['admin','manager'], permKey: 'reports' },
     ],
   },
   {
     title: 'ADMIN',
     items: [
-      { path: '/users',    label: 'Users',    Icon: UserCog, roles: ['admin','manager'] },
-      { path: '/settings', label: 'Settings', Icon: Settings, roles: ['admin'] },
+      { path: '/users',    label: 'Users',    Icon: UserCog, roles: ['admin','manager'], permKey: 'users' },
+      { path: '/settings', label: 'Settings', Icon: Settings, roles: ['admin'], permKey: 'settings' },
     ],
   },
 ];
@@ -65,8 +67,16 @@ const NAV_GROUPS: NavGroup[] = [
 // ─── Sidebar content ──────────────────────────────────────────────────────────
 
 function SidebarContent({ onNav }: { onNav?: () => void }) {
-  const { user, logout, hasRole } = useAuthStore();
+  const { user, logout, hasRole, hasPermission } = useAuthStore();
   const location = useLocation();
+  const [shopLogo, setShopLogo] = useState('');
+
+  useEffect(() => {
+    settingsApi.get().then((res) => {
+      const logo = (res.data as Record<string, unknown>)?.shopLogo as string | undefined;
+      if (logo) setShopLogo(logo);
+    }).catch(() => {});
+  }, []);
 
   const initial = user?.displayName?.[0]?.toUpperCase() ?? '?';
   const roleLabel = user?.role
@@ -82,12 +92,20 @@ function SidebarContent({ onNav }: { onNav?: () => void }) {
         style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}
       >
         <div className="flex items-center gap-3">
-          <div
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
-            style={{ background: '#E8590C' }}
-          >
-            <CakeSlice size={20} color="#fff" strokeWidth={2} />
-          </div>
+          {shopLogo ? (
+            <img
+              src={shopLogo}
+              alt="Shop logo"
+              style={{ height: 36, width: 36, objectFit: 'contain', borderRadius: 8, background: '#fff', flexShrink: 0 }}
+            />
+          ) : (
+            <div
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
+              style={{ background: '#E8590C' }}
+            >
+              <CakeSlice size={20} color="#fff" strokeWidth={2} />
+            </div>
+          )}
           <div>
             <p
               className="text-[17px] font-bold leading-tight"
@@ -105,7 +123,9 @@ function SidebarContent({ onNav }: { onNav?: () => void }) {
       {/* ── Navigation ────────────────────────────────────────── */}
       <nav className="flex-1 overflow-y-auto scrollbar-none py-3 px-3 space-y-4">
         {NAV_GROUPS.map((group) => {
-          const visible = group.items.filter((item) => hasRole(...item.roles));
+          const visible = group.items.filter((item) =>
+            hasRole(...item.roles) && hasPermission(item.permKey)
+          );
           if (!visible.length) return null;
           return (
             <div key={group.title}>

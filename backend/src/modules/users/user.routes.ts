@@ -1,19 +1,18 @@
 import { Router } from 'express';
-import {
-  userController,
-  createUserValidation,
-  updateUserValidation,
-  resetPasswordValidation,
-  deactivateValidation,
-} from './user.controller';
+import { userController } from './user.controller';
 
 const router = Router();
 
-router.get('/', userController.list);
-router.get('/:id', userController.getById);
-router.post('/', createUserValidation, userController.create);
-router.put('/:id', updateUserValidation, userController.update);
-router.post('/:id/reset-password', resetPasswordValidation, userController.resetPassword);
-router.post('/:id/deactivate', deactivateValidation, userController.deactivate);
+// List / get (admin sees fingerprint, manager sees table read-only)
+router.get('/',       userController.list);
+router.get('/:id',    userController.getById);
+
+// All mutation routes are admin-only (enforced inside each controller action)
+router.post('/',                    userController.create);
+router.put('/:id',                  userController.update);
+router.post('/:id/reset-password',  userController.resetPassword);
+router.post('/:id/deactivate',      userController.deactivate);
+router.post('/:id/activate',        userController.activate);
+router.post('/:id/unlock',          userController.unlock);
 
 export default router;

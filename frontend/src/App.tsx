@@ -1,12 +1,13 @@
-import { useEffect } from 'react';
+import { useEffect }   from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
-import { authApi } from '@/api';
-import { IS_DEMO } from '@/api/client';
-import ProtectedRoute from '@/components/common/ProtectedRoute';
-import Layout from '@/components/layout/Layout';
-import PageShell from '@/components/common/PageShell';
-import type { Role } from '@/store/authStore';
+import { authApi }      from '@/api';
+import { IS_DEMO }      from '@/api/client';
+import ProtectedRoute   from '@/components/common/ProtectedRoute';
+import Layout           from '@/components/layout/Layout';
+import PageShell        from '@/components/common/PageShell';
+import NoAccessPage     from '@/pages/NoAccessPage';
+import type { Role }    from '@/store/authStore';
 
 // Pages
 import LoginPage        from '@/pages/auth/LoginPage';
@@ -27,47 +28,57 @@ import ReportsPage      from '@/pages/reports/ReportsPage';
 import UsersPage        from '@/pages/users/UsersPage';
 import SettingsPage     from '@/pages/settings/SettingsPage';
 
-/** Wrap a non-billing page in consistent padding + cream background. */
 function S({ children }: { children: React.ReactNode }) {
   return <PageShell>{children}</PageShell>;
+}
+
+/**
+ * Guard that redirects to /no-access for roles not in the allowed list.
+ * Used client-side only — server enforces the real 403.
+ */
+function RoleGuard({ roles, children }: { roles: Role[]; children: React.ReactNode }) {
+  const { user } = useAuthStore();
+  if (!user || !roles.includes(user.role)) {
+    return <Navigate to="/no-access" replace />;
+  }
+  return <>{children}</>;
+}
+
+/**
+ * Guard that also checks per-user permission key in addition to role.
+ * Admin always passes. Other roles must have the permission enabled.
+ */
+function PermissionGuard({ roles, permKey, children }: { roles: Role[]; permKey: string; children: React.ReactNode }) {
+  const { user, hasPermission } = useAuthStore();
+  if (!user || !roles.includes(user.role)) {
+    return <Navigate to="/no-access" replace />;
+  }
+  if (!hasPermission(permKey)) {
+    return <Navigate to="/no-access" replace />;
+  }
+  return <>{children}</>;
 }
 
 export default function App() {
   const { isAuthenticated, setUser, setHydrating, isHydrating } = useAuthStore();
 
   /**
-   * On mount: if a token exists but user is null (e.g. page refresh),
-   * call /me to rehydrate the user object into the auth store.
-   * This fixes the empty sidebar / "Guest" bug.
+   * On page load: if a token exists but `user` is null (e.g. after a hard refresh),
+   * call /auth/me to rehydrate the user object. If that fails (token expired),
+   * clear tokens and send to /login.
    */
   useEffect(() => {
     if (!isAuthenticated) {
       setHydrating(false);
       return;
     }
-
-    // In demo mode the token is a local placeholder — no backend exists to call.
-    // Rehydrate the user directly from the mock store instead of calling /me.
-    if (IS_DEMO) {
-      authApi.me()
-        .then((res) => {
-          const u = res.data?.user ?? res.data;
-          if (u?.id) setUser(u);
-          else setHydrating(false);
-        })
-        .catch(() => setHydrating(false));
-      return;
-    }
-
     authApi.me()
       .then((res) => {
-        // /me returns { user: { ... } } or the user directly depending on mock
         const u = res.data?.user ?? res.data;
         if (u?.id) setUser(u);
         else setHydrating(false);
       })
       .catch(() => {
-        // Token invalid / expired — clear and send to login
         localStorage.removeItem('accessToken');
         localStorage.removeItem('refreshToken');
         setHydrating(false);
@@ -79,9 +90,20 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
 
-      {/* ── Print route: NO sidebar, no Layout, no auth guard ── */}
-      {/* Load in an iframe; caller calls iframe.contentWindow.print() */}
+      {/* Print route — no sidebar, no auth guard needed */}
       <Route path="/bills/:id/print" element={<PrintReceiptPage />} />
+
+      {/* No-access page — authenticated but wrong role */}
+      <Route
+        path="/no-access"
+        element={
+          <ProtectedRoute isHydrating={isHydrating}>
+            <Layout />
+          </ProtectedRoute>
+        }
+      >
+        <Route index element={<S><NoAccessPage /></S>} />
+      </Route>
 
       <Route
         element={
@@ -90,35 +112,36 @@ export default function App() {
           </ProtectedRoute>
         }
       >
-        {/* Billing: full-screen POS — manages its own layout */}
-        <Route path="/billing" element={<BillingPage />} />
+        {/* ── All roles ─────────────────────────────────────────── */}
+        <Route path="/billing"    element={<PermissionGuard roles={['admin','manager','cashier']} permKey="billing"><BillingPage /></PermissionGuard>} />
+        <Route path="/dashboard"  element={<PermissionGuard roles={['admin','manager','cashier']} permKey="dashboard"><S><DashboardPage /></S></PermissionGuard>} />
+        <Route path="/customers"  element={<PermissionGuard roles={['admin','manager','cashier']} permKey="customers"><S><CustomersPage /></S></PermissionGuard>} />
+        <Route path="/orders"     element={<PermissionGuard roles={['admin','manager','cashier']} permKey="orders"><S><OrdersPage /></S></PermissionGuard>} />
+        <Route path="/shifts"     element={<PermissionGuard roles={['admin','manager','cashier']} permKey="shifts"><S><ShiftsPage /></S></PermissionGuard>} />
 
-        {/* All other pages: wrapped in PageShell */}
-        <Route path="/dashboard"     element={<S><DashboardPage /></S>} />
-        <Route path="/customers"     element={<S><CustomersPage /></S>} />
-        <Route path="/shifts"        element={<S><ShiftsPage /></S>} />
-        <Route path="/orders"        element={<ProtectedRoute roles={['admin', 'manager', 'cashier'] as Role[]}><S><OrdersPage /></S></ProtectedRoute>} />
-
+        {/* ── Admin + Manager only ──────────────────────────────── */}
         <Route path="/products"
-          element={<ProtectedRoute roles={['admin', 'manager'] as Role[]}><S><ProductsPage /></S></ProtectedRoute>} />
+          element={<PermissionGuard roles={['admin','manager']} permKey="products"><S><ProductsPage /></S></PermissionGuard>} />
         <Route path="/suppliers"
-          element={<ProtectedRoute roles={['admin', 'manager'] as Role[]}><S><SuppliersPage /></S></ProtectedRoute>} />
+          element={<PermissionGuard roles={['admin','manager']} permKey="suppliers"><S><SuppliersPage /></S></PermissionGuard>} />
         <Route path="/raw-materials"
-          element={<ProtectedRoute roles={['admin', 'manager'] as Role[]}><S><RawMaterialsPage /></S></ProtectedRoute>} />
+          element={<PermissionGuard roles={['admin','manager']} permKey="rawMaterials"><S><RawMaterialsPage /></S></PermissionGuard>} />
         <Route path="/purchases"
-          element={<ProtectedRoute roles={['admin', 'manager'] as Role[]}><S><PurchasesPage /></S></ProtectedRoute>} />
+          element={<PermissionGuard roles={['admin','manager']} permKey="purchases"><S><PurchasesPage /></S></PermissionGuard>} />
         <Route path="/production"
-          element={<ProtectedRoute roles={['admin', 'manager'] as Role[]}><S><ProductionPage /></S></ProtectedRoute>} />
+          element={<PermissionGuard roles={['admin','manager']} permKey="production"><S><ProductionPage /></S></PermissionGuard>} />
         <Route path="/stock"
-          element={<ProtectedRoute roles={['admin', 'manager'] as Role[]}><S><StockPage /></S></ProtectedRoute>} />
+          element={<PermissionGuard roles={['admin','manager']} permKey="stock"><S><StockPage /></S></PermissionGuard>} />
         <Route path="/expenses"
-          element={<ProtectedRoute roles={['admin', 'manager'] as Role[]}><S><ExpensesPage /></S></ProtectedRoute>} />
+          element={<PermissionGuard roles={['admin','manager']} permKey="expenses"><S><ExpensesPage /></S></PermissionGuard>} />
         <Route path="/reports"
-          element={<ProtectedRoute roles={['admin', 'manager'] as Role[]}><S><ReportsPage /></S></ProtectedRoute>} />
+          element={<PermissionGuard roles={['admin','manager']} permKey="reports"><S><ReportsPage /></S></PermissionGuard>} />
         <Route path="/users"
-          element={<ProtectedRoute roles={['admin', 'manager'] as Role[]}><S><UsersPage /></S></ProtectedRoute>} />
+          element={<PermissionGuard roles={['admin','manager']} permKey="users"><S><UsersPage /></S></PermissionGuard>} />
+
+        {/* ── Admin only ────────────────────────────────────────── */}
         <Route path="/settings"
-          element={<ProtectedRoute roles={['admin'] as Role[]}><S><SettingsPage /></S></ProtectedRoute>} />
+          element={<PermissionGuard roles={['admin']} permKey="settings"><S><SettingsPage /></S></PermissionGuard>} />
       </Route>
 
       <Route path="/" element={<Navigate to="/dashboard" replace />} />

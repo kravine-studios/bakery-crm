@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Mock data for UI preview — no backend needed.
  * The api/index.ts is swapped to return these when VITE_MOCK=true.
  */
@@ -45,10 +45,10 @@ export const mockCustomers = [
 ];
 
 export const mockSuppliers = [
-  { id: 1, name: 'Anand Dairy Farms', contactPerson: 'Ramesh Anand', phone: '9700112233', email: null, address: '12, APMC Road, Pune', gstin: '27AABCA1234F1Z5', paymentTerms: 'Net 7', ratingNotes: 'Fresh milk daily. Occasionally delayed.', openingBalance: 0, isActive: true },
-  { id: 2, name: 'Royal Dry Fruits', contactPerson: 'Salim Sheikh', phone: '9822334455', email: 'royal@dryfruits.com', address: 'Crawford Market, Mumbai', gstin: '27BBBCS5678G2Z3', paymentTerms: 'COD', ratingNotes: 'Premium quality, no delays.', openingBalance: 4200, isActive: true },
-  { id: 3, name: 'National Sugar Co.', contactPerson: 'Vijay Kulkarni', phone: '9833445566', email: null, address: 'Industrial Area, Solapur', gstin: '27CCCCT9012H3Z1', paymentTerms: 'Net 15', ratingNotes: 'Reliable. Good pricing.', openingBalance: 0, isActive: true },
-  { id: 4, name: 'Mumbai Flour Mills', contactPerson: 'Dinesh Patil', phone: '9766554433', email: null, address: 'Dadar, Mumbai', gstin: null, paymentTerms: 'COD', ratingNotes: '', openingBalance: 0, isActive: true },
+  { id: 1, name: 'Anand Dairy Farms', contactPerson: 'Ramesh Anand', phone: '9700112233', email: null, address: '12, APMC Road, Pune', gstin: '27AABCA1234F1Z5', paymentTerms: 'Net 7', ratingNotes: 'Fresh milk daily. Occasionally delayed.', isActive: true },
+  { id: 2, name: 'Royal Dry Fruits', contactPerson: 'Salim Sheikh', phone: '9822334455', email: 'royal@dryfruits.com', address: 'Crawford Market, Mumbai', gstin: '27BBBCS5678G2Z3', paymentTerms: 'COD', ratingNotes: 'Premium quality, no delays.', isActive: true },
+  { id: 3, name: 'National Sugar Co.', contactPerson: 'Vijay Kulkarni', phone: '9833445566', email: null, address: 'Industrial Area, Solapur', gstin: '27CCCCT9012H3Z1', paymentTerms: 'Net 15', ratingNotes: 'Reliable. Good pricing.', isActive: true },
+  { id: 4, name: 'Mumbai Flour Mills', contactPerson: 'Dinesh Patil', phone: '9766554433', email: null, address: 'Dadar, Mumbai', gstin: null, paymentTerms: 'COD', ratingNotes: '', isActive: true },
 ];
 
 export const mockRawMaterials = [
@@ -63,10 +63,10 @@ export const mockRawMaterials = [
 ];
 
 export const mockBatches = [
-  { id: 1, batchNumber: '10-26-001', productId: 1, productName: 'Kaju Katli', plannedQuantity: 10, actualQuantity: 9.8, unit: 'kg', status: 'completed', productionDate: '2026-10-25T06:00:00Z', expiryDate: '2026-11-01', productionCost: 3920, costPerUnit: 400, supervisorName: 'Ramesh Kumar', shiftId: 1 },
-  { id: 2, batchNumber: '10-26-001', productId: 7, productName: 'Motichoor Ladoo', plannedQuantity: 15, actualQuantity: 14.5, unit: 'kg', status: 'completed', productionDate: '2026-10-25T08:00:00Z', expiryDate: '2026-10-30', productionCost: 2320, costPerUnit: 160, supervisorName: 'Sunita Devi', shiftId: 1 },
-  { id: 3, batchNumber: '10-26-002', productId: 1, productName: 'Kaju Katli', plannedQuantity: 10, actualQuantity: null, unit: 'kg', status: 'in_progress', productionDate: '2026-10-28T06:00:00Z', expiryDate: null, productionCost: 0, costPerUnit: 0, supervisorName: 'Ramesh Kumar', shiftId: null },
-  { id: 4, batchNumber: '10-26-001', productId: 9, productName: 'Rasgulla (1kg)', plannedQuantity: 50, actualQuantity: 48, unit: 'box', status: 'completed', productionDate: '2026-10-27T07:00:00Z', expiryDate: '2026-10-31', productionCost: 5760, costPerUnit: 120, supervisorName: 'Ramesh Kumar', shiftId: 2 },
+  { id: 1, batchNumber: '10-26-001', productId: 1, productName: 'Kaju Katli',     produced_quantity: 9.8,  actualQuantity: 9.8,  unit: 'kg',  production_date: '2026-10-25T06:00:00Z', productionDate: '2026-10-25T06:00:00Z', expiryDate: '2026-11-01', cost_per_kg: 400, costPerUnit: 400, selling_price_per_unit: 850, supervisorName: 'Ramesh Kumar', shiftId: 1 },
+  { id: 2, batchNumber: '10-26-001', productId: 7, productName: 'Motichoor Ladoo', produced_quantity: 14.5, actualQuantity: 14.5, unit: 'kg',  production_date: '2026-10-25T08:00:00Z', productionDate: '2026-10-25T08:00:00Z', expiryDate: '2026-10-30', cost_per_kg: 160, costPerUnit: 160, selling_price_per_unit: 380, supervisorName: 'Sunita Devi',  shiftId: 1 },
+  { id: 3, batchNumber: '10-26-002', productId: 1, productName: 'Kaju Katli',     produced_quantity: null,  actualQuantity: null, unit: 'kg',  production_date: '2026-10-28T06:00:00Z', productionDate: '2026-10-28T06:00:00Z', expiryDate: null,          cost_per_kg: 0,   costPerUnit: 0,   selling_price_per_unit: null, supervisorName: 'Ramesh Kumar', shiftId: null },
+  { id: 4, batchNumber: '10-26-001', productId: 9, productName: 'Rasgulla (1kg)', produced_quantity: 48,   actualQuantity: 48,   unit: 'box', production_date: '2026-10-27T07:00:00Z', productionDate: '2026-10-27T07:00:00Z', expiryDate: '2026-10-31', cost_per_kg: 120, costPerUnit: 120, selling_price_per_unit: 280, supervisorName: 'Ramesh Kumar', shiftId: 2 },
 ];
 
 export const mockBills = [
@@ -77,9 +77,9 @@ export const mockBills = [
 ];
 
 export const mockOrders = [
-  { id: 1, orderNumber: 'ORD-10280001', customerId: 1, customerName: 'Priya Sharma', customerPhone: '9876543210', orderType: 'custom', deliveryType: 'pickup', pickupDate: '2026-10-30', deliveryDate: null, totalAmount: 1800, advancePaid: 500, balanceDue: 1300, status: 'in_production', assignedPerson: null, customisationNotes: '2kg Chocolate Truffle. "Happy Birthday Arjun" in blue. Extra moist.' },
-  { id: 2, orderNumber: 'ORD-10280002', customerId: 4, customerName: 'Sunrise Caterers', customerPhone: '9911223344', orderType: 'bulk', deliveryType: 'delivery', pickupDate: null, deliveryDate: '2026-11-01', totalAmount: 18500, advancePaid: 10000, balanceDue: 8500, status: 'booked', assignedPerson: 'Ravi Driver', customisationNotes: '50 boxes Kaju Katli (500g each) for Diwali corporate gifting.' },
-  { id: 3, orderNumber: 'ORD-10270003', customerId: 5, customerName: 'Mehta Family', customerPhone: '9955667788', orderType: 'custom', deliveryType: 'pickup', pickupDate: '2026-10-28', deliveryDate: null, totalAmount: 950, advancePaid: 950, balanceDue: 0, status: 'ready', assignedPerson: null, customisationNotes: '1kg Pineapple cake. "Anniversary" written.' },
+  { id: 1, orderNumber: 'ORD-10280001', customerId: 1, customerName: 'Priya Sharma', customerPhone: '9876543210', orderType: 'custom', deliveryType: 'pickup', pickupDate: '2026-10-30', deliveryDate: null, totalAmount: 1800, advancePaid: 500, balanceDue: 1300, assignedPerson: null, customisationNotes: '2kg Chocolate Truffle. "Happy Birthday Arjun" in blue. Extra moist.' },
+  { id: 2, orderNumber: 'ORD-10280002', customerId: 4, customerName: 'Sunrise Caterers', customerPhone: '9911223344', orderType: 'bulk', deliveryType: 'delivery', pickupDate: null, deliveryDate: '2026-11-01', totalAmount: 18500, advancePaid: 10000, balanceDue: 8500, assignedPerson: 'Ravi Driver', customisationNotes: '50 boxes Kaju Katli (500g each) for Diwali corporate gifting.' },
+  { id: 3, orderNumber: 'ORD-10270003', customerId: 5, customerName: 'Mehta Family', customerPhone: '9955667788', orderType: 'custom', deliveryType: 'pickup', pickupDate: '2026-10-28', deliveryDate: null, totalAmount: 950, advancePaid: 950, balanceDue: 0, assignedPerson: null, customisationNotes: '1kg Pineapple cake. "Anniversary" written.' },
 ];
 
 export const mockExpenses = [
@@ -91,11 +91,41 @@ export const mockExpenses = [
 ];
 
 export const mockUsers = [
-  { id: 1, username: 'admin', displayName: 'Shop Owner', role: 'admin', discountLimit: 0, isActive: true, createdAt: '2026-01-01' },
-  { id: 2, username: 'manager1', displayName: 'Sunita Sharma', role: 'manager', discountLimit: 200, isActive: true, createdAt: '2026-01-05' },
-  { id: 3, username: 'cashier1', displayName: 'Amit Cashier', role: 'cashier', discountLimit: 50, isActive: true, createdAt: '2026-01-10' },
-  { id: 4, username: 'cashier2', displayName: 'Priya Cashier', role: 'cashier', discountLimit: 50, isActive: true, createdAt: '2026-02-01' },
-  { id: 5, username: 'cashier3', displayName: 'Rohan Cashier', role: 'cashier', discountLimit: 0, isActive: false, createdAt: '2026-03-01' },
+  {
+    id: 1, username: 'admin',    displayName: 'Shop Owner',    role: 'admin' as const,
+    isActive: true,  createdAt: '2026-01-01',
+    lastLoginAt: '2026-10-28T09:00:00Z', lastLoginTab: 'owner',
+    isLocked: false, lockedUntil: null,
+    passwordFingerprint: 'a3f9c1d2',
+  },
+  {
+    id: 2, username: 'manager1', displayName: 'Sunita Sharma', role: 'manager' as const,
+    isActive: true,  createdAt: '2026-01-05',
+    lastLoginAt: '2026-10-28T08:30:00Z', lastLoginTab: 'staff',
+    isLocked: false, lockedUntil: null,
+    passwordFingerprint: 'b7e4f912',
+  },
+  {
+    id: 3, username: 'cashier1', displayName: 'Amit Cashier',  role: 'cashier' as const,
+    isActive: true,  createdAt: '2026-01-10',
+    lastLoginAt: '2026-10-28T09:15:00Z', lastLoginTab: 'staff',
+    isLocked: false, lockedUntil: null,
+    passwordFingerprint: 'c2a8e047',
+  },
+  {
+    id: 4, username: 'cashier2', displayName: 'Priya Cashier', role: 'cashier' as const,
+    isActive: true,  createdAt: '2026-02-01',
+    lastLoginAt: '2026-10-27T14:20:00Z', lastLoginTab: 'staff',
+    isLocked: false, lockedUntil: null,
+    passwordFingerprint: 'd5f1b293',
+  },
+  {
+    id: 5, username: 'cashier3', displayName: 'Rohan Cashier', role: 'cashier' as const,
+    isActive: false, createdAt: '2026-03-01',
+    lastLoginAt: null, lastLoginTab: null,
+    isLocked: false, lockedUntil: null,
+    passwordFingerprint: 'e8c3a165',
+  },
 ];
 
 export const mockAlerts = {
@@ -108,7 +138,7 @@ export const mockAlerts = {
     { productId: 9, productName: 'Rasgulla (1kg)', batchId: 4, batchNumber: '10-26-001', expiryDate: '2026-10-31', stock: 12 },
   ],
   ordersDue: [
-    { id: 3, order_number: 'ORD-10270003', customer_name: 'Mehta Family', status: 'ready' },
+    { id: 3, order_number: 'ORD-10270003', customer_name: 'Mehta Family', balance_due: 0 },
   ],
   pendingPayments: [
     { id: 2, name: 'Royal Dry Fruits', outstanding: 4200 },
@@ -124,15 +154,17 @@ export const mockSalesSummary = {
 };
 
 export const mockPurchaseReceipts = [
-  { id: 1, grn_number: 'GRN-261025-0001', supplier_id: 1, supplier_name: 'Anand Dairy Farms', supplier_invoice_no: 'ADF-2234', receipt_date: '2026-10-25T08:00:00Z', grandTotal: 2025, received_by_name: 'Sunita Sharma' },
-  { id: 2, grn_number: 'GRN-261025-0002', supplier_id: 2, supplier_name: 'Royal Dry Fruits', supplier_invoice_no: 'RDF-0891', receipt_date: '2026-10-25T09:30:00Z', grandTotal: 8400, received_by_name: 'Sunita Sharma' },
-  { id: 3, grn_number: 'GRN-261027-0001', supplier_id: 3, supplier_name: 'National Sugar Co.', supplier_invoice_no: 'NSC-3312', receipt_date: '2026-10-27T10:00:00Z', grandTotal: 4500, received_by_name: 'Manager' },
+  { id: 1, grn_number: 'GRN-261025-0001', bill_number: 'ADF-2234', supplier_id: 1, supplier_name: 'Anand Dairy Farms', supplier_invoice_no: 'ADF-2234', receipt_date: '2026-10-25T08:00:00Z', grandTotal: 2025, grand_total: 2025, payment_status: 'paid',    amount_paid: 2025, received_by_name: 'Sunita Sharma', items: [] },
+  { id: 2, grn_number: 'GRN-261025-0002', bill_number: 'RDF-0891', supplier_id: 2, supplier_name: 'Royal Dry Fruits',    supplier_invoice_no: 'RDF-0891', receipt_date: '2026-10-25T09:30:00Z', grandTotal: 8400, grand_total: 8400, payment_status: 'unpaid',  amount_paid: 0,    received_by_name: 'Sunita Sharma', items: [] },
+  { id: 3, grn_number: 'GRN-261027-0001', bill_number: 'NSC-3312', supplier_id: 3, supplier_name: 'National Sugar Co.', supplier_invoice_no: 'NSC-3312', receipt_date: '2026-10-27T10:00:00Z', grandTotal: 4500, grand_total: 4500, payment_status: 'partial', amount_paid: 2000, received_by_name: 'Manager',        items: [] },
 ];
 
 export const mockStock = [
-  { product_id: 1, product_name: 'Kaju Katli', batch_id: 1, batch_number: '10-26-001', expiry_date: '2026-11-01', production_date: '2026-10-25', currentStock: 7.2, selling_unit: 'kg' },
-  { product_id: 7, product_name: 'Motichoor Ladoo', batch_id: 2, batch_number: '10-26-001', expiry_date: '2026-10-30', production_date: '2026-10-25', currentStock: 6.2, selling_unit: 'kg' },
-  { product_id: 9, product_name: 'Rasgulla (1kg)', batch_id: 4, batch_number: '10-26-001', expiry_date: '2026-10-31', production_date: '2026-10-27', currentStock: 12, selling_unit: 'box' },
-  { product_id: 4, product_name: 'Medjool Dates (500g)', batch_id: null, batch_number: null, expiry_date: null, production_date: null, currentStock: 24, selling_unit: 'box' },
-  { product_id: 5, product_name: 'Ferrero Rocher (16pc)', batch_id: null, batch_number: null, expiry_date: null, production_date: null, currentStock: 18, selling_unit: 'box' },
+  { product_id: 1, product_name: 'Kaju Katli',          batch_id: 1, batch_number: '10-26-001', expiry_date: '2026-11-01', production_date: '2026-10-25', store_qty: 7.2,  counter_qty: 3.5,  currentStock: 7.2,  selling_unit: 'kg',  low_stock_level: 2 },
+  { product_id: 7, product_name: 'Motichoor Ladoo',      batch_id: 2, batch_number: '10-26-001', expiry_date: '2026-10-30', production_date: '2026-10-25', store_qty: 6.2,  counter_qty: 1.5,  currentStock: 6.2,  selling_unit: 'kg',  low_stock_level: 2 },
+  { product_id: 9, product_name: 'Rasgulla (1kg)',       batch_id: 4, batch_number: '10-26-001', expiry_date: '2026-10-31', production_date: '2026-10-27', store_qty: 12,   counter_qty: 5,    currentStock: 12,   selling_unit: 'box', low_stock_level: 3 },
+  { product_id: 4, product_name: 'Medjool Dates (500g)', batch_id: null, batch_number: null,       expiry_date: null,          production_date: null,          store_qty: 24,   counter_qty: 10,   currentStock: 24,   selling_unit: 'box', low_stock_level: 5 },
+  { product_id: 5, product_name: 'Ferrero Rocher (16pc)',batch_id: null, batch_number: null,       expiry_date: null,          production_date: null,          store_qty: 18,   counter_qty: 0,    currentStock: 18,   selling_unit: 'box', low_stock_level: 4 },
+  { product_id: 2, product_name: 'Gulab Jamun',          batch_id: 5, batch_number: '10-26-001', expiry_date: '2026-11-02', production_date: '2026-10-26', store_qty: 80,   counter_qty: 20,   currentStock: 80,   selling_unit: 'piece', low_stock_level: 10 },
+  { product_id: 6, product_name: 'Pineapple Pastry',     batch_id: 6, batch_number: '10-26-001', expiry_date: '2026-10-29', production_date: '2026-10-28', store_qty: 15,   counter_qty: 2,    currentStock: 15,   selling_unit: 'piece', low_stock_level: 5 },
 ];

@@ -63,6 +63,7 @@ interface ShopSettings {
   fssaiNumber: string | null;
   invoiceFooter: string;
   receiptPaper: '58mm' | '80mm' | 'A4';
+  shopLogo?: string;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -147,6 +148,12 @@ function ThermalReceipt({ bill, shop, isDuplicate }: { bill: Bill; shop: ShopSet
 
   return (
     <div className="receipt">
+      {/* Shop logo */}
+      {shop.shopLogo && (
+        <div className="center" style={{ marginBottom: 4 }}>
+          <img src={shop.shopLogo} alt="Shop logo" style={{ maxHeight: 48, maxWidth: '80%', objectFit: 'contain' }} />
+        </div>
+      )}
       {/* Shop header */}
       <div className="center bold large">{shop.shopName}</div>
       {shop.address && <div className="center">{shop.address}</div>}
@@ -256,6 +263,9 @@ function A4Receipt({ bill, shop, isDuplicate }: { bill: Bill; shop: ShopSettings
       {/* Header */}
       <div className="header">
         <div className="shop-info">
+          {shop.shopLogo && (
+            <img src={shop.shopLogo} alt="Shop logo" style={{ maxHeight: 56, maxWidth: 120, objectFit: 'contain', marginBottom: 6 }} />
+          )}
           <h1>{shop.shopName}</h1>
           {shop.address && <p>{shop.address}</p>}
           {shop.phone && <p>Tel: {shop.phone}</p>}

@@ -11,6 +11,8 @@ const poolConfig: PoolConfig = {
   max: env.db.poolMax,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
+  // Force UTF-8 encoding on every connection (Bonus Fix 3)
+  options: '-c client_encoding=UTF8',
 };
 
 export const pool = new Pool(poolConfig);

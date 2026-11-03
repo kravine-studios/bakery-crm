@@ -1,17 +1,26 @@
 import { Request, Response } from 'express';
 import { body } from 'express-validator';
-import { asyncHandler } from '../../utils/asyncHandler';
-import { validate } from '../../middleware/validate';
-import { login, pinLogin, refreshToken, logout } from './auth.service';
+import { asyncHandler }  from '../../utils/asyncHandler';
+import { validate }      from '../../middleware/validate';
+import { Role }          from '../../types/enums';
+import {
+  ownerLogin, staffLogin, refreshAccessToken, logout,
+} from './auth.service';
 
-export const loginValidation = [
+// ── Validation chains ─────────────────────────────────────────────────────────
+
+export const ownerLoginValidation = [
   body('username').isString().trim().notEmpty().withMessage('Username is required'),
   body('password').isString().isLength({ min: 1 }).withMessage('Password is required'),
   validate,
 ];
 
-export const pinLoginValidation = [
-  body('pin').isString().isLength({ min: 4, max: 6 }).withMessage('PIN must be 4-6 digits'),
+export const staffLoginValidation = [
+  body('username').isString().trim().notEmpty().withMessage('Username is required'),
+  body('password').isString().isLength({ min: 1 }).withMessage('Password is required'),
+  body('role')
+    .isIn([Role.Manager, Role.Cashier])
+    .withMessage('Role must be manager or cashier'),
   validate,
 ];
 
@@ -20,33 +29,37 @@ export const refreshTokenValidation = [
   validate,
 ];
 
+// ── Controller ────────────────────────────────────────────────────────────────
+
 export const authController = {
-  login: asyncHandler(async (req: Request, res: Response) => {
+  /** POST /auth/owner-login — admin role only */
+  ownerLogin: asyncHandler(async (req: Request, res: Response) => {
     const { username, password } = req.body;
-    const result = await login(username, password, req);
+    const result = await ownerLogin(username, password, req);
     res.json(result);
   }),
 
-  pinLogin: asyncHandler(async (req: Request, res: Response) => {
-    const { pin } = req.body;
-    const result = await pinLogin(pin, req);
+  /** POST /auth/staff-login — manager or cashier; role must match client selection */
+  staffLogin: asyncHandler(async (req: Request, res: Response) => {
+    const { username, password, role } = req.body;
+    const result = await staffLogin(username, password, role as Role, req);
     res.json(result);
   }),
 
+  /** POST /auth/refresh */
   refresh: asyncHandler(async (req: Request, res: Response) => {
-    const { refreshToken: token } = req.body;
-    const result = refreshToken(token);
+    const { refreshToken } = req.body;
+    const result = refreshAccessToken(refreshToken);
     res.json(result);
   }),
 
+  /** POST /auth/logout  (authenticated) */
   logout: asyncHandler(async (req: Request, res: Response) => {
-    if (req.user) {
-      await logout(req.user.id, req);
-    }
+    if (req.user) await logout(req.user.id, req);
     res.json({ message: 'Logged out' });
   }),
 
-  // Return the currently authenticated user's info
+  /** GET /auth/me  (authenticated) — never returns password hash */
   me: asyncHandler(async (req: Request, res: Response) => {
     res.json({ user: req.user });
   }),

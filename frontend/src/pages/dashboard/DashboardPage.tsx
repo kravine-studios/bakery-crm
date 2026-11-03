@@ -26,7 +26,7 @@ interface SalesSummary {
 interface Alerts {
   lowStock: Array<{ id: number; name: string; currentStock: number; minStockLevel: number; baseUnit?: string }>;
   nearExpiry: Array<{ productName: string; batchNumber: string; expiryDate: string; stock?: number }>;
-  ordersDue: Array<{ order_number: string; customer_name: string | null; status: string; pickup_date?: string; delivery_date?: string }>;
+  ordersDue: Array<{ order_number: string; customer_name: string | null; balance_due?: number; pickup_date?: string; delivery_date?: string }>;
   pendingPayments: Array<{ id: number; name: string; outstanding: number }>;
 }
 
@@ -484,7 +484,12 @@ export default function DashboardPage() {
                   {order.customer_name ?? 'Walk-in'}
                 </p>
               </div>
-              <StatusPill status={order.status} />
+              {/* Show Balance Due instead of status pill (Part 1a) */}
+              {order.balance_due != null && (
+                <span style={{ fontSize: 14, fontWeight: 700, color: order.balance_due > 0 ? '#C0392B' : '#4F7F4A', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+                  {new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(order.balance_due)}
+                </span>
+              )}
             </div>
           ))}
         </WidgetCard>

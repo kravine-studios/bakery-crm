@@ -1,21 +1,44 @@
 /**
- * Bakery CRM — Billing / POS Screen  (v4 — Assure POS layout)
- * Left: category sections with compact product tiles
- * Right: bill table (Code | Item | Rate | Qty | Price)
+ * Bakery CRM — Billing / POS Screen  (v5 — Table-first POS)
+ *
+ * Layout:
+ *   LEFT  (~300 px) — "Today" summary: Take-away, Home delivery, On Hold.
+ *                     Lists held bills with Resume / Discard.
+ *   RIGHT (flex-1)  — Bill header (order type, employee, customer, bill no.)
+ *                     Bill table: Code | Product Name | Rate | Qty | Price | Notes | ×
+ *                     Entry row always first; committed lines below.
+ *                     Totals footer (discount, taxes, Amount) + payment + Pay.
+ *
+ * REGRESSION GUARANTEES (unchanged from v4):
+ *   - Stock deducted at billingApi.create (FEFO inside demoStore.bills.create)
+ *   - Held bills → billingApi.hold  (no stock deduction)
+ *   - GST / CGST / SGST / round-off maths identical
+ *   - Payment modes: Cash, UPI, Card
+ *   - Bill numbering via demoStore.bills.create
+ *   - Printing via /bills/:id/print including shop logo
+ *   - Role access, owner-only editing untouched
+ *   - Settings stockBlockZero respected
+ *   - Live counter-stock polling every 15 s
  */
 
 import {
-  useState, useEffect, useRef, useCallback, KeyboardEvent,
+  useState, useEffect, useRef, useCallback,
+  KeyboardEvent, ReactNode,
 } from 'react';
 import {
-  Banknote, Smartphone, CreditCard, ShoppingBag,
-  Scale, X, Plus, Minus, CheckCircle, Printer, ArrowRight,
+  Banknote, Smartphone, CreditCard, CheckCircle, Printer,
+  ArrowRight, X, HelpCircle, Package, Truck,
+  Clock, AlertCircle, RotateCcw, Trash2,
 } from 'lucide-react';
-import { productApi, billingApi, customerApi, categoryApi, settingsApi } from '@/api';
+import {
+  productApi, billingApi, customerApi, categoryApi, settingsApi,
+} from '@/api';
 import { IS_MOCK, IS_DEMO } from '@/api/client';
+import { useAuthStore } from '@/store/authStore';
+
 const USE_MOCK = IS_MOCK || IS_DEMO;
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─────────────────────────── Types ───────────────────────────────────────────
 
 interface Product {
   id: number;
@@ -29,13 +52,14 @@ interface Product {
   foodType: 'veg' | 'non_veg' | 'egg';
   isWeighed: boolean;
   isActive: boolean;
+  lowStockLevel?: number | null;
 }
 
 interface Category { id: number; name: string; }
 
-interface CartItem {
-  productId?: number;
-  productCode?: string;
+interface CartLine {
+  productId: number;
+  productCode: string;
   name: string;
   quantity: number;
   unit: string;
@@ -43,9 +67,24 @@ interface CartItem {
   gstRate: number;
   hsnCode?: string;
   foodType?: 'veg' | 'non_veg' | 'egg';
+  notes: string;
 }
 
 interface Customer { id: number; name: string; phone: string; loyaltyPoints: number; }
+
+interface HeldBill {
+  billId: number;
+  invoiceNumber: string;
+  grandTotal: number;
+  createdAt: string;
+  customerName?: string;
+  orderType: string;
+  items: CartLine[];
+  customerId?: number;
+  customerPhone?: string;
+  discountAmount: number;
+  paymentMode: PayMode;
+}
 
 interface CompletedBill {
   billId: number;
@@ -55,50 +94,59 @@ interface CompletedBill {
 
 type PayMode = 'cash' | 'upi' | 'card';
 
-// ─── Category colours ─────────────────────────────────────────────────────────
+// ─────────────────────────── Colour palette ───────────────────────────────────
 
-interface CatStyle {
-  bg: string; border: string; badge: string; price: string;
-  chipBg: string; chipText: string; chipActiveBg: string; chipActiveText: string;
-}
-
-const CAT: Record<string, CatStyle> = {
-  'Sweets':         { bg: '#FFF0D9', border: '#E8590C', badge: '#E8590C', price: '#E8590C', chipBg: '#FEE8D5', chipText: '#C44A06', chipActiveBg: '#E8590C', chipActiveText: '#fff' },
-  'Dates':          { bg: '#FEF9E7', border: '#C98B4B', badge: '#C98B4B', price: '#9B6F00', chipBg: '#FDF3CC', chipText: '#9B6F00', chipActiveBg: '#C98B4B', chipActiveText: '#fff' },
-  'Chocolates':     { bg: '#F9EEF8', border: '#B0457F', badge: '#B0457F', price: '#8C3069', chipBg: '#F5E0F2', chipText: '#8C3069', chipActiveBg: '#B0457F', chipActiveText: '#fff' },
-  'Bakery Items':   { bg: '#EAF4FC', border: '#1E8E94', badge: '#1E8E94', price: '#056B76', chipBg: '#D5EEF5', chipText: '#056B76', chipActiveBg: '#1E8E94', chipActiveText: '#fff' },
-  'Cakes':          { bg: '#FCE4DF', border: '#C8503A', badge: '#C8503A', price: '#A3382A', chipBg: '#F9D0CA', chipText: '#A3382A', chipActiveBg: '#C8503A', chipActiveText: '#fff' },
-  'Cold Drinks':    { bg: '#E0F3F4', border: '#1E8E94', badge: '#1E8E94', price: '#056B76', chipBg: '#C8EBEC', chipText: '#056B76', chipActiveBg: '#1E8E94', chipActiveText: '#fff' },
-  'Snacks':         { bg: '#FFF4C8', border: '#C98B4B', badge: '#C98B4B', price: '#9B6F00', chipBg: '#FDEEB0', chipText: '#9B6F00', chipActiveBg: '#C98B4B', chipActiveText: '#fff' },
-  'Packaged Goods': { bg: '#F3F4F6', border: '#7A6A5F', badge: '#7A6A5F', price: '#6B5B52', chipBg: '#E8E3E0', chipText: '#6B5B52', chipActiveBg: '#7A6A5F', chipActiveText: '#fff' },
-  '__default__':    { bg: '#F8F6F3', border: '#7A6A5F', badge: '#7A6A5F', price: '#6B5B52', chipBg: '#EDE9E6', chipText: '#6B5B52', chipActiveBg: '#7A6A5F', chipActiveText: '#fff' },
+const T = {
+  bg:       '#FBF6EE',
+  surface:  '#FFFFFF',
+  border:   '#EADFD0',
+  divider:  '#F0EAE3',
+  brand:    '#E8590C',
+  brandHov: '#C84A0A',
+  muted:    '#7A6A5F',
+  text:     '#1F1611',
+  green:    '#4F7F4A',
+  red:      '#C0392B',
+  amber:    '#D9822B',
 };
 
-function cs(name: string): CatStyle { return CAT[name] ?? CAT['__default__']; }
+// ─────────────────────────── Helpers ─────────────────────────────────────────
 
-// ─── Veg dot ─────────────────────────────────────────────────────────────────
+const fmt = (n: number) =>
+  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 2 }).format(n);
 
-function FoodDot({ type }: { type: 'veg' | 'non_veg' | 'egg' }) {
-  const color = type === 'veg' ? '#4F7F4A' : type === 'non_veg' ? '#C0392B' : '#C98B4B';
-  return (
-    <span
-      title={type === 'veg' ? 'Veg' : type === 'non_veg' ? 'Non-Veg' : 'Egg'}
-      style={{ display: 'inline-flex', height: 14, width: 14, alignItems: 'center', justifyContent: 'center', borderRadius: 2, border: `1.5px solid ${color}`, flexShrink: 0 }}
-    >
-      <span style={{ display: 'block', height: 7, width: 7, borderRadius: '50%', background: color }} />
-    </span>
-  );
+const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+function shortUnit(u: string) {
+  const map: Record<string, string> = {
+    kilogram: 'kg', piece: 'pcs', pieces: 'pcs', box: 'box',
+    packet: 'pkt', packets: 'pkt', litre: 'L', dozen: 'doz',
+  };
+  return map[u.toLowerCase()] ?? u;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function fmt(n: number) {
-  return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 2 }).format(n);
+/** Parse "500g" → 0.5, ".250" → 0.25, "1.5" → 1.5 */
+function parseQty(raw: string, unit: string): number | null {
+  const trimmed = raw.trim().toLowerCase();
+  if (unit === 'kg') {
+    const gMatch = trimmed.match(/^(\d+\.?\d*)\s*g$/);
+    if (gMatch) return parseFloat(gMatch[1]) / 1000;
+    const kgMatch = trimmed.match(/^(\d+\.?\d*)\s*(kg)?$/);
+    if (kgMatch) return parseFloat(kgMatch[1]);
+    return null;
+  }
+  const n = parseFloat(trimmed);
+  return isNaN(n) ? null : n;
 }
 
-function r2(n: number) { return Math.round((n + Number.EPSILON) * 100) / 100; }
-
-// ─── Iframe print helper ──────────────────────────────────────────────────────
+/** Parse "001*3 005 012*2" → [{code,qty},...] */
+function parseCodeString(raw: string): Array<{ code: string; qty: number }> {
+  return raw.trim().split(/\s+/).map((token) => {
+    const m = token.match(/^(\d+)\*(\d+\.?\d*)$/);
+    if (m) return { code: m[1].padStart(3, '0'), qty: parseFloat(m[2]) };
+    return { code: token.padStart(3, '0'), qty: 1 };
+  });
+}
 
 function printBill(billId: number, paper = '80mm') {
   const iframeId = `print-frame-${billId}`;
@@ -106,101 +154,302 @@ function printBill(billId: number, paper = '80mm') {
   if (!frame) {
     frame = document.createElement('iframe');
     frame.id = iframeId;
-    frame.style.cssText = 'position:fixed;width:1px;height:1px;left:-9999px;top:-9999px;border:none;';
+    frame.style.cssText =
+      'position:fixed;width:1px;height:1px;left:-9999px;top:-9999px;border:none;';
     document.body.appendChild(frame);
   }
   frame.src = `/bills/${billId}/print?paper=${paper}`;
   frame.onload = () => {
-    try { frame?.contentWindow?.document.fonts.ready.then(() => { frame?.contentWindow?.print(); }); }
-    catch { frame?.contentWindow?.print(); }
+    try {
+      frame?.contentWindow?.document.fonts.ready.then(() => {
+        frame?.contentWindow?.print();
+      });
+    } catch {
+      frame?.contentWindow?.print();
+    }
   };
 }
 
-// ─── Weight entry dialog ──────────────────────────────────────────────────────
+// ─────────────────────────── Veg dot ─────────────────────────────────────────
 
-function WeightDialog({ product, onConfirm, onClose }: { product: Product; onConfirm: (qty: number) => void; onClose: () => void; }) {
-  const [input, setInput] = useState('');
-  const [unit, setUnit] = useState<'kg' | 'g'>('kg');
-  const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { inputRef.current?.focus(); }, []);
-  const qty = unit === 'g' ? (parseFloat(input) / 1000) || 0 : parseFloat(input) || 0;
-  const chips = [{ label: '250 g', kg: 0.25 }, { label: '500 g', kg: 0.5 }, { label: '1 kg', kg: 1 }];
-
+function VegDot({ type }: { type?: 'veg' | 'non_veg' | 'egg' }) {
+  if (!type) return null;
+  const color =
+    type === 'veg' ? '#4F7F4A' : type === 'non_veg' ? '#C0392B' : '#C98B4B';
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div style={{ background: '#fff', borderRadius: 20, padding: 28, width: 360, boxShadow: '0 8px 32px rgba(43,27,20,0.16)' }}>
+    <span
+      title={type === 'veg' ? 'Veg' : type === 'non_veg' ? 'Non-Veg' : 'Egg'}
+      style={{
+        display: 'inline-flex', height: 13, width: 13, flexShrink: 0,
+        alignItems: 'center', justifyContent: 'center',
+        borderRadius: 2, border: `1.5px solid ${color}`,
+      }}
+    >
+      <span style={{ display: 'block', height: 7, width: 7, borderRadius: '50%', background: color }} />
+    </span>
+  );
+}
+
+// ─────────────────────────── Stock chip ──────────────────────────────────────
+
+function StockChip({ qty, unit, low }: { qty: number; unit: string; low?: number | null }) {
+  if (qty <= 0) return (
+    <span style={{ background: '#FDE5E0', color: T.red, borderRadius: 9999, padding: '1px 7px', fontSize: 11, fontWeight: 700 }}>
+      Out
+    </span>
+  );
+  const isLow = low != null && qty <= low;
+  return (
+    <span style={{
+      background: isLow ? '#FFF1DC' : '#E8F5E9',
+      color: isLow ? T.amber : T.green,
+      borderRadius: 9999, padding: '1px 7px', fontSize: 11, fontWeight: 700,
+    }}>
+      {isLow ? 'Low: ' : ''}{qty % 1 === 0 ? qty : qty.toFixed(2)} {shortUnit(unit)}
+    </span>
+  );
+}
+
+// ─────────────────────────── Shortcuts overlay ───────────────────────────────
+
+function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
+  const rows: [string, string][] = [
+    ['F2', 'Focus Code cell'],
+    ['F3', 'Browse menu drawer'],
+    ['F4', 'Focus Customer search'],
+    ['F6', 'Hold bill'],
+    ['Ctrl+Enter', 'Pay (checkout)'],
+    ['Esc', 'Clear entry row'],
+    ['001*3', 'Add code 001, qty 3'],
+    ['001 005 012', 'Add multiple codes'],
+    ['500g', 'Enter 500g for weighed item'],
+  ];
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(0,0,0,0.4)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: '#fff', borderRadius: 16, padding: '24px 28px', width: 380,
+        boxShadow: '0 8px 32px rgba(43,27,20,0.16)',
+      }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <div>
-            <p style={{ fontSize: 20, fontWeight: 700, color: '#1F1611', margin: 0 }}>{product.name}</p>
-            <p style={{ fontSize: 16, color: '#7A6A5F', margin: 0 }}>{fmt(product.sellingPrice)} / kg</p>
+          <span style={{ fontSize: 17, fontWeight: 700, color: T.text }}>Keyboard shortcuts</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.muted }}>
+            <X size={18} />
+          </button>
+        </div>
+        {rows.map(([key, desc]) => (
+          <div key={key} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: `1px solid ${T.divider}` }}>
+            <kbd style={{ background: T.bg, color: T.text, borderRadius: 6, padding: '2px 8px', fontSize: 13, fontFamily: 'monospace' }}>{key}</kbd>
+            <span style={{ fontSize: 14, color: T.muted }}>{desc}</span>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#7A6A5F' }}><X size={22} /></button>
-        </div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-          {(['kg', 'g'] as const).map((u) => (
-            <button key={u} onClick={() => setUnit(u)} style={{ flex: 1, height: 44, borderRadius: 10, fontSize: 16, fontWeight: 600, cursor: 'pointer', background: unit === u ? '#E8590C' : '#F4EDE4', color: unit === u ? '#fff' : '#7A6A5F', border: 'none' }}>{u}</button>
-          ))}
-        </div>
-        <input ref={inputRef} type="number" step="0.001" min="0" value={input} onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && qty > 0) { onConfirm(qty); onClose(); } }}
-          placeholder={unit === 'kg' ? 'e.g. 0.500' : 'e.g. 500'}
-          style={{ width: '100%', height: 56, fontSize: 22, textAlign: 'center', border: '2px solid #EADFD0', borderRadius: 12, outline: 'none', padding: '0 12px', marginBottom: 12, boxSizing: 'border-box' }}
-          onFocus={(e) => (e.currentTarget.style.borderColor = '#E8590C')} onBlur={(e) => (e.currentTarget.style.borderColor = '#EADFD0')} />
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-          {chips.map((c) => (
-            <button key={c.label} onClick={() => { setUnit('kg'); setInput(String(c.kg)); }} style={{ flex: 1, height: 44, borderRadius: 10, fontSize: 15, fontWeight: 600, cursor: 'pointer', background: '#FFF1DC', color: '#D9822B', border: '1px solid #F5C88A' }}>{c.label}</button>
-          ))}
-        </div>
-        {qty > 0 && (
-          <p style={{ textAlign: 'center', color: '#7A6A5F', marginBottom: 12, fontSize: 16 }}>
-            <Scale size={15} style={{ display: 'inline', marginRight: 4 }} />
-            {qty.toFixed(3)} kg × {fmt(product.sellingPrice)} = <strong>{fmt(qty * product.sellingPrice)}</strong>
-          </p>
-        )}
-        <button disabled={qty <= 0} onClick={() => { if (qty > 0) { onConfirm(qty); onClose(); } }}
-          style={{ width: '100%', height: 52, borderRadius: 12, fontSize: 18, fontWeight: 700, background: qty > 0 ? '#E8590C' : '#F8C4AA', color: '#fff', border: 'none', cursor: qty > 0 ? 'pointer' : 'not-allowed' }}>
-          Add to bill
-        </button>
+        ))}
       </div>
     </div>
   );
 }
 
-// ─── Success panel ────────────────────────────────────────────────────────────
+// ─────────────────────────── Browse menu drawer ───────────────────────────────
 
-function SuccessPanel({ bill, cashReceived, grandTotal, onNewBill, onViewBill, onPrint }: {
+function BrowseDrawer({
+  products,
+  categories,
+  stockMap,
+  cartLines,
+  onSelect,
+  onClose,
+}: {
+  products: Product[];
+  categories: Category[];
+  stockMap: Record<number, number>;
+  cartLines: CartLine[];
+  onSelect: (p: Product) => void;
+  onClose: () => void;
+}) {
+  const [activeCat, setActiveCat] = useState<number | null>(null);
+  const [query, setQuery] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const filtered = products.filter((p) => {
+    if (!p.isActive) return false;
+    if (activeCat !== null && p.categoryId !== activeCat) return false;
+    if (query.trim()) {
+      const q = query.toLowerCase();
+      return p.name.toLowerCase().includes(q) || p.productCode.toLowerCase().startsWith(q);
+    }
+    return true;
+  });
+
+  const inCartQty = (id: number) =>
+    cartLines.filter((c) => c.productId === id).reduce((s, c) => s + c.quantity, 0);
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(0,0,0,0.4)',
+      display: 'flex', justifyContent: 'flex-end',
+    }}>
+      <div style={{
+        background: '#fff', width: 520, maxWidth: '95vw', height: '100%',
+        display: 'flex', flexDirection: 'column',
+        boxShadow: '-4px 0 20px rgba(43,27,20,0.14)',
+      }}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: `1px solid ${T.border}` }}>
+          <span style={{ fontSize: 18, fontWeight: 700, color: T.text }}>Browse menu  <kbd style={{ background: T.bg, borderRadius: 6, padding: '2px 8px', fontSize: 13, fontFamily: 'monospace', color: T.muted }}>F3</kbd></span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.muted }}>
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Search */}
+        <div style={{ padding: '10px 16px', borderBottom: `1px solid ${T.border}` }}>
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search name or code…"
+            style={{
+              width: '100%', height: 40, fontSize: 15, padding: '0 12px',
+              border: `1.5px solid ${T.border}`, borderRadius: 10, outline: 'none',
+              background: T.bg, color: T.text, boxSizing: 'border-box',
+            }}
+            onFocus={(e) => (e.currentTarget.style.borderColor = T.brand)}
+            onBlur={(e) => (e.currentTarget.style.borderColor = T.border)}
+          />
+        </div>
+
+        {/* Category chips */}
+        <div style={{ display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none', padding: '8px 16px', flexShrink: 0 }}>
+          <button onClick={() => setActiveCat(null)}
+            style={{ height: 28, padding: '0 12px', borderRadius: 9999, border: 'none', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 600, cursor: 'pointer', flexShrink: 0, background: activeCat === null ? T.brand : T.bg, color: activeCat === null ? '#fff' : T.muted }}>
+            All
+          </button>
+          {categories.map((cat) => (
+            <button key={cat.id} onClick={() => setActiveCat(activeCat === cat.id ? null : cat.id)}
+              style={{ height: 28, padding: '0 12px', borderRadius: 9999, border: 'none', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 600, cursor: 'pointer', flexShrink: 0, background: activeCat === cat.id ? T.brand : T.bg, color: activeCat === cat.id ? '#fff' : T.muted }}>
+              {cat.name}
+            </button>
+          ))}
+        </div>
+
+        {/* Product grid */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '10px 16px', display: 'flex', flexWrap: 'wrap', gap: 8, alignContent: 'flex-start' }}>
+          {filtered.map((p) => {
+            const counterQty = (stockMap[p.id] ?? 0) - inCartQty(p.id);
+            return (
+              <button key={p.id} onClick={() => { onSelect(p); onClose(); }}
+                style={{
+                  width: 150, minHeight: 72, display: 'flex', flexDirection: 'column',
+                  alignItems: 'flex-start', padding: '8px 10px', borderRadius: 10,
+                  border: `1px solid ${T.border}`, background: T.bg, cursor: 'pointer',
+                  textAlign: 'left', gap: 3,
+                }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: T.brand, fontFamily: 'monospace' }}>{p.productCode}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: T.text, lineHeight: 1.25, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                  {p.name}
+                </span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: T.brand }}>{fmt(p.sellingPrice)}</span>
+                <StockChip qty={counterQty} unit={p.sellingUnit} low={p.lowStockLevel} />
+              </button>
+            );
+          })}
+          {filtered.length === 0 && (
+            <div style={{ width: '100%', padding: '40px 0', textAlign: 'center', color: T.muted }}>No products found</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────── Bill details drawer ──────────────────────────────
+
+function BillsDrawer({
+  title,
+  bills,
+  onClose,
+  onReprint,
+}: {
+  title: string;
+  bills: Array<{ id: number; invoiceNumber: string; billDate: string; customerName?: string; grandTotal: number; paymentMode?: string }>;
+  onClose: () => void;
+  onReprint: (id: number) => void;
+}) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(0,0,0,0.4)', display: 'flex', justifyContent: 'flex-end' }}>
+      <div style={{ background: '#fff', width: 480, maxWidth: '95vw', height: '100%', display: 'flex', flexDirection: 'column', boxShadow: '-4px 0 20px rgba(43,27,20,0.14)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: `1px solid ${T.border}` }}>
+          <span style={{ fontSize: 17, fontWeight: 700, color: T.text }}>{title}</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.muted }}><X size={20} /></button>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          {bills.length === 0 ? (
+            <div style={{ padding: 32, textAlign: 'center', color: T.muted, fontSize: 15 }}>No bills yet today</div>
+          ) : bills.map((b) => (
+            <div key={b.id} style={{ display: 'flex', alignItems: 'center', padding: '12px 20px', borderBottom: `1px solid ${T.divider}` }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{b.invoiceNumber}</div>
+                <div style={{ fontSize: 12, color: T.muted }}>
+                  {new Date(b.billDate).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                  {b.customerName ? ` · ${b.customerName}` : ''}
+                  {b.paymentMode ? ` · ${b.paymentMode.toUpperCase()}` : ''}
+                </div>
+              </div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: T.text, marginRight: 12, fontVariantNumeric: 'tabular-nums' }}>
+                {fmt(b.grandTotal)}
+              </div>
+              <button onClick={() => onReprint(b.id)}
+                style={{ display: 'flex', alignItems: 'center', gap: 4, height: 34, padding: '0 12px', borderRadius: 8, border: `1px solid ${T.border}`, background: T.bg, color: T.muted, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                <Printer size={14} /> Reprint
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────── Success panel ───────────────────────────────────
+
+function SuccessPanel({
+  bill, cashReceived, grandTotal,
+  onNewBill, onViewBill, onPrint,
+}: {
   bill: CompletedBill; cashReceived: number; grandTotal: number;
   onNewBill: () => void; onViewBill: () => void; onPrint: () => void;
 }) {
   const change = Math.max(0, r2(cashReceived - grandTotal));
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgba(31,22,17,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ background: '#fff', borderRadius: 24, padding: '36px 32px', width: 420, boxShadow: '0 12px 40px rgba(43,27,20,0.20)', textAlign: 'center' }}>
+      <div style={{ background: '#fff', borderRadius: 24, padding: '36px 32px', width: 400, boxShadow: '0 12px 40px rgba(43,27,20,0.20)', textAlign: 'center' }}>
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
           <div style={{ background: '#E8F5E9', borderRadius: '50%', padding: 16 }}>
-            <CheckCircle size={48} color="#4F7F4A" strokeWidth={2} />
+            <CheckCircle size={48} color={T.green} strokeWidth={2} />
           </div>
         </div>
-        <p style={{ fontSize: 22, fontWeight: 700, color: '#1F1611', margin: '0 0 4px' }}>Payment successful!</p>
-        <p style={{ fontSize: 16, color: '#7A6A5F', margin: '0 0 20px' }}>{bill.invoiceNumber}</p>
-        <div style={{ background: '#FBF6EE', borderRadius: 14, padding: '16px 20px', marginBottom: change > 0 ? 12 : 20 }}>
-          <p style={{ fontSize: 16, color: '#7A6A5F', margin: '0 0 4px' }}>Grand Total</p>
-          <p style={{ fontSize: 38, fontWeight: 800, color: '#E8590C', margin: 0, fontFamily: '"DM Serif Display", serif', fontVariantNumeric: 'tabular-nums' }}>{fmt(grandTotal)}</p>
+        <p style={{ fontSize: 20, fontWeight: 700, color: T.text, margin: '0 0 4px' }}>Payment successful!</p>
+        <p style={{ fontSize: 15, color: T.muted, margin: '0 0 20px' }}>{bill.invoiceNumber}</p>
+        <div style={{ background: T.bg, borderRadius: 14, padding: '14px 20px', marginBottom: change > 0 ? 10 : 20 }}>
+          <p style={{ fontSize: 15, color: T.muted, margin: '0 0 2px' }}>Grand Total</p>
+          <p style={{ fontSize: 36, fontWeight: 800, color: T.brand, margin: 0, fontFamily: '"DM Serif Display", serif', fontVariantNumeric: 'tabular-nums' }}>{fmt(grandTotal)}</p>
         </div>
         {change > 0 && (
-          <div style={{ background: '#E8F5E9', borderRadius: 14, padding: '12px 20px', marginBottom: 20 }}>
-            <p style={{ fontSize: 16, color: '#7A6A5F', margin: '0 0 4px' }}>Change due</p>
-            <p style={{ fontSize: 32, fontWeight: 700, color: '#4F7F4A', margin: 0, fontVariantNumeric: 'tabular-nums' }}>{fmt(change)}</p>
+          <div style={{ background: '#E8F5E9', borderRadius: 14, padding: '10px 20px', marginBottom: 20 }}>
+            <p style={{ fontSize: 14, color: T.muted, margin: '0 0 2px' }}>Change due</p>
+            <p style={{ fontSize: 28, fontWeight: 700, color: T.green, margin: 0, fontVariantNumeric: 'tabular-nums' }}>{fmt(change)}</p>
           </div>
         )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <button onClick={onPrint} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 56, borderRadius: 14, fontSize: 18, fontWeight: 700, background: '#E8590C', color: '#fff', border: 'none', cursor: 'pointer' }}>
-            <Printer size={22} strokeWidth={2} /> Print Bill
+          <button onClick={onPrint} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 52, borderRadius: 12, fontSize: 17, fontWeight: 700, background: T.brand, color: '#fff', border: 'none', cursor: 'pointer' }}>
+            <Printer size={20} strokeWidth={2} /> Print Bill
           </button>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <button onClick={onNewBill} style={{ height: 52, borderRadius: 12, fontSize: 17, fontWeight: 600, background: '#FBF6EE', color: '#1F1611', border: '1.5px solid #EADFD0', cursor: 'pointer' }}>New Bill</button>
-            <button onClick={onViewBill} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, height: 52, borderRadius: 12, fontSize: 17, fontWeight: 600, background: '#FBF6EE', color: '#1F1611', border: '1.5px solid #EADFD0', cursor: 'pointer' }}>
-              View Bill <ArrowRight size={16} />
+            <button onClick={onNewBill} style={{ height: 48, borderRadius: 12, fontSize: 16, fontWeight: 600, background: T.bg, color: T.text, border: `1.5px solid ${T.border}`, cursor: 'pointer' }}>New Bill</button>
+            <button onClick={onViewBill} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, height: 48, borderRadius: 12, fontSize: 16, fontWeight: 600, background: T.bg, color: T.text, border: `1.5px solid ${T.border}`, cursor: 'pointer' }}>
+              View Bill <ArrowRight size={15} />
             </button>
           </div>
         </div>
@@ -209,157 +458,183 @@ function SuccessPanel({ bill, cashReceived, grandTotal, onNewBill, onViewBill, o
   );
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
+// ─────────────────────────── Main component ───────────────────────────────────
 
 export default function BillingPage() {
-  const [products,    setProducts]    = useState<Product[]>([]);
-  const [categories,  setCategories]  = useState<Category[]>([]);
-  const [loadingData, setLoadingData] = useState(true);
+  const { user } = useAuthStore();
+  const isOwner  = user?.role === 'admin';
+  const cashierName = user?.displayName ?? 'Cashier';
+
+  // ── Master data ────────────────────────────────────────────────────────────
+  const [products,     setProducts]     = useState<Product[]>([]);
+  const [categories,   setCategories]   = useState<Category[]>([]);
+  const [stockMap,     setStockMap]     = useState<Record<number, number>>({});
+  const [stockBlockZero, setStockBlockZero] = useState(false);
   const [receiptPaper, setReceiptPaper] = useState('80mm');
+  const [loadingData,  setLoadingData]  = useState(true);
 
-  const [search,         setSearch]         = useState('');
-  const [activeCategory, setActiveCategory] = useState<number | null>(null);
-  const [highlightIdx,   setHighlightIdx]   = useState(-1);
+  // ── Bill lines (cart) ──────────────────────────────────────────────────────
+  const [lines, setLines] = useState<CartLine[]>([]);
 
-  const [cart, setCart] = useState<CartItem[]>([]);
-  const [orderType, setOrderType] = useState<'takeaway' | 'dine-in'>('takeaway');
+  // ── Bill header ────────────────────────────────────────────────────────────
+  const [orderType,       setOrderType]       = useState<'takeaway' | 'delivery'>('takeaway');
+  const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [deliveryPhone,   setDeliveryPhone]   = useState('');
+  const [customer,        setCustomer]        = useState<Customer | null>(null);
+  const [custQuery,       setCustQuery]       = useState('');
+  const [custResults,     setCustResults]     = useState<Customer[]>([]);
+  const [showCustDrop,    setShowCustDrop]    = useState(false);
 
-  const [customerQuery,    setCustomerQuery]    = useState('');
-  const [customer,         setCustomer]         = useState<Customer | null>(null);
-  const [customerResults,  setCustomerResults]  = useState<Customer[]>([]);
-  const [showCustDropdown, setShowCustDropdown] = useState(false);
+  // ── Entry row state ────────────────────────────────────────────────────────
+  const [entryCode,    setEntryCode]    = useState('');
+  const [entryProduct, setEntryProduct] = useState<Product | null>(null);
+  const [entryQtyRaw,  setEntryQtyRaw]  = useState('');
+  const [entryNotes,   setEntryNotes]   = useState('');
+  const [entryError,   setEntryError]   = useState('');
 
+  // Product-name dropdown
+  const [showNameDrop,   setShowNameDrop]   = useState(false);
+  const [nameDrop,       setNameDrop]       = useState<Product[]>([]);
+  const [nameDropIdx,    setNameDropIdx]    = useState(0);
+  const [nameQuery,      setNameQuery]      = useState('');
+
+  // ── Discount ───────────────────────────────────────────────────────────────
   const [discountAmount,    setDiscountAmount]    = useState(0);
   const [showDiscountInput, setShowDiscountInput] = useState(false);
   const [discountInput,     setDiscountInput]     = useState('');
 
-  const [paymentMode,  setPaymentMode]  = useState<PayMode>('cash');
-  const [cashReceived, setCashReceived] = useState('');
+  // ── Payment ────────────────────────────────────────────────────────────────
+  const [payMode,       setPayMode]       = useState<PayMode>('cash');
+  const [cashReceived,  setCashReceived]  = useState('');
 
+  // ── UI state ───────────────────────────────────────────────────────────────
   const [submitting,    setSubmitting]    = useState(false);
   const [errorMsg,      setErrorMsg]      = useState('');
   const [completedBill, setCompletedBill] = useState<CompletedBill | null>(null);
-  const [weightProduct, setWeightProduct] = useState<Product | null>(null);
-  const [codeFlash,     setCodeFlash]     = useState('');
-  const [stockMap,      setStockMap]      = useState<Record<number, number>>({});
+  const [heldBills,     setHeldBills]     = useState<HeldBill[]>([]);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showBrowse,    setShowBrowse]    = useState(false);
+  const [drawerType,    setDrawerType]    = useState<'takeaway' | 'delivery' | null>(null);
+  // today's paid bills for the summary panel
+  const [todayBills,    setTodayBills]    = useState<Array<{
+    id: number; invoiceNumber: string; billDate: string; orderType: string;
+    customerName?: string; grandTotal: number; cashierName?: string; paymentMode?: string;
+  }>>([]);
 
-  const searchRef  = useRef<HTMLInputElement>(null);
-  const custRef    = useRef<HTMLInputElement>(null);
-  const flashTimer = useRef<ReturnType<typeof setTimeout>>();
+  // Refs
+  const codeRef  = useRef<HTMLInputElement>(null);
+  const qtyRef   = useRef<HTMLInputElement>(null);
+  const custRef  = useRef<HTMLInputElement>(null);
+  const nameRef  = useRef<HTMLInputElement>(null);
 
+  // ── Stock refresh ──────────────────────────────────────────────────────────
   function refreshStock() {
     if (!USE_MOCK) return;
     import('@/store/demoStore').then(({ stock }) => {
       const lots = stock.list();
       const map: Record<number, number> = {};
-      lots.forEach((lot) => { if (lot.product_id) map[lot.product_id] = (map[lot.product_id] ?? 0) + (lot.counter_qty ?? 0); });
+      lots.forEach((lot: { product_id: number; counter_qty?: number }) => {
+        if (lot.product_id) map[lot.product_id] = (map[lot.product_id] ?? 0) + (lot.counter_qty ?? 0);
+      });
       setStockMap(map);
     });
   }
 
-  useEffect(() => {
-    refreshStock();
-    const interval = setInterval(refreshStock, 15000);
-    window.addEventListener('focus', refreshStock);
-    return () => { clearInterval(interval); window.removeEventListener('focus', refreshStock); };
-  }, []);
+  // ── Today bills refresh ────────────────────────────────────────────────────
+  function refreshTodayBills() {
+    if (!USE_MOCK) return;
+    import('@/store/demoStore').then(({ bills }) => {
+      const today = new Date().toISOString().split('T')[0];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const all = (bills.list() as any[]).filter((b) =>
+        b.billDate?.startsWith(today) && b.status === 'paid'
+      );
+      setTodayBills(all);
+    });
+  }
 
+  // ── Initial load ───────────────────────────────────────────────────────────
   useEffect(() => {
     setLoadingData(true);
-    Promise.all([productApi.list({ active: true }), categoryApi.list(), settingsApi.get()])
-      .then(([pr, cr, sr]) => {
-        setProducts(pr.data); setCategories(cr.data);
-        setReceiptPaper(sr.data?.receiptPaper ?? '80mm');
-        setTimeout(refreshStock, 0);
-      })
-      .catch(() => {}).finally(() => setLoadingData(false));
+    Promise.all([
+      productApi.list({ active: true }),
+      categoryApi.list(),
+      settingsApi.get(),
+    ]).then(([pr, cr, sr]) => {
+      setProducts(pr.data);
+      setCategories(cr.data);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const s = sr.data as any;
+      setStockBlockZero(s?.stockBlockZero === true);
+      setReceiptPaper(s?.receiptPaper ?? '80mm');
+      setTimeout(refreshStock, 0);
+      setTimeout(refreshTodayBills, 0);
+    }).catch(() => {}).finally(() => setLoadingData(false));
+
+    const interval = setInterval(() => { refreshStock(); refreshTodayBills(); }, 15000);
+    window.addEventListener('focus', () => { refreshStock(); refreshTodayBills(); });
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', refreshStock);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Global keyboard shortcuts ──────────────────────────────────────────────
   useEffect(() => {
     function onKey(e: globalThis.KeyboardEvent) {
-      const isSearch = e.target === searchRef.current;
-      const isCust   = e.target === custRef.current;
-      const tag      = (e.target as HTMLElement).tagName;
-      const inOther  = (tag === 'INPUT' || tag === 'TEXTAREA') && !isSearch && !isCust;
-      if ((e.ctrlKey && e.key === 'k') || e.key === 'F2') { e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select(); return; }
+      const active = document.activeElement as HTMLElement | null;
+      const tag = active?.tagName ?? '';
+      const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+
+      if (e.key === 'F2') { e.preventDefault(); codeRef.current?.focus(); codeRef.current?.select(); return; }
+      if (e.key === 'F3') { e.preventDefault(); setShowBrowse(true); return; }
       if (e.key === 'F4') { e.preventDefault(); custRef.current?.focus(); return; }
-      if (inOther) return;
-      if (e.key === 'Escape') { if (isSearch) { setSearch(''); setHighlightIdx(-1); searchRef.current?.blur(); } }
+      if (e.key === 'F6') { e.preventDefault(); handleHold(); return; }
+      if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); handleCheckout(); return; }
+      if (e.key === '?') { e.preventDefault(); setShowShortcuts(true); return; }
+      if (!inInput && e.key === 'Escape') { clearEntryRow(); return; }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lines, orderType, deliveryAddress, customer, payMode, cashReceived]);
 
-  const catCount = products.reduce<Record<number, number>>((acc, p) => {
-    if (p.isActive) acc[p.categoryId] = (acc[p.categoryId] ?? 0) + 1;
-    return acc;
-  }, {});
-
-  useEffect(() => { setHighlightIdx(-1); }, [search, activeCategory]);
-
-  const addToCart = useCallback((p: Product, qty = 1) => {
-    setCart((prev) => {
-      const i = prev.findIndex((x) => x.productId === p.id);
-      if (i !== -1) return prev.map((x, n) => n === i ? { ...x, quantity: r2(x.quantity + qty) } : x);
-      return [...prev, { productId: p.id, productCode: p.productCode, name: p.name, quantity: qty, unit: p.sellingUnit, rate: p.sellingPrice, gstRate: p.gstRate, hsnCode: p.hsnCode ?? undefined, foodType: p.foodType }];
-    });
-  }, []);
-
-  function handleCardClick(p: Product) { if (p.isWeighed) { setWeightProduct(p); return; } addToCart(p); }
-
-  function flash(msg: string, ok: boolean) {
-    setCodeFlash(msg);
-    clearTimeout(flashTimer.current);
-    flashTimer.current = setTimeout(() => setCodeFlash(''), ok ? 1800 : 2500);
-  }
-
-  const filtered = products.filter((p) => {
-    if (!p.isActive) return false;
-    if (activeCategory !== null && p.categoryId !== activeCategory) return false;
-    if (search.trim()) { const q = search.trim().toLowerCase(); return p.name.toLowerCase().includes(q) || p.productCode?.toLowerCase().startsWith(q); }
-    return true;
-  });
-
-  function onSearchKey(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'ArrowDown') { e.preventDefault(); setHighlightIdx((i) => Math.min(i + 1, filtered.length - 1)); return; }
-    if (e.key === 'ArrowUp')   { e.preventDefault(); setHighlightIdx((i) => Math.max(i - 1, 0)); return; }
-    if (e.key === 'Escape')    { setSearch(''); setHighlightIdx(-1); searchRef.current?.blur(); return; }
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const q = search.trim(); if (!q) return;
-      const byCode = products.find((p) => p.isActive && p.productCode?.toLowerCase() === q.toLowerCase());
-      if (byCode) { handleCardClick(byCode); flash(`✓ ${byCode.name} added`, true); setSearch(''); setHighlightIdx(-1); setTimeout(() => searchRef.current?.focus(), 50); return; }
-      if (highlightIdx >= 0 && highlightIdx < filtered.length) { handleCardClick(filtered[highlightIdx]); setSearch(''); setHighlightIdx(-1); setTimeout(() => searchRef.current?.focus(), 50); return; }
-      if (filtered.length === 1) { handleCardClick(filtered[0]); setSearch(''); setHighlightIdx(-1); setTimeout(() => searchRef.current?.focus(), 50); return; }
-      if (filtered.length === 0) flash(`No product found for "${q}"`, false);
-    }
-  }
-
-  function updateQty(idx: number, delta: number) {
-    setCart((prev) => prev.map((item, i) => {
-      if (i !== idx) return item;
-      const step = item.unit === 'kg' ? delta * 0.25 : delta;
-      return { ...item, quantity: Math.max(item.unit === 'kg' ? 0.25 : 1, r2(item.quantity + step)) };
-    }));
-  }
-
-  function removeItem(idx: number) { setCart((prev) => prev.filter((_, i) => i !== idx)); }
-
+  // ── Customer search debounce ───────────────────────────────────────────────
   useEffect(() => {
-    if (!customerQuery.trim()) { setCustomerResults([]); setShowCustDropdown(false); return; }
+    if (!custQuery.trim()) { setCustResults([]); setShowCustDrop(false); return; }
     const t = setTimeout(async () => {
-      try { const res = await customerApi.list({ search: customerQuery }); setCustomerResults(res.data.slice(0, 5)); setShowCustDropdown(true); } catch {}
-    }, 280);
+      try {
+        const res = await customerApi.list({ search: custQuery });
+        setCustResults(res.data.slice(0, 6));
+        setShowCustDrop(true);
+      } catch { /* */ }
+    }, 260);
     return () => clearTimeout(t);
-  }, [customerQuery]);
+  }, [custQuery]);
 
-  function selectCustomer(c: Customer) { setCustomer(c); setCustomerQuery(`${c.name}  ·  ${c.phone}`); setShowCustDropdown(false); }
-  function clearCustomer()              { setCustomer(null); setCustomerQuery(''); setShowCustDropdown(false); }
+  // ── Product name dropdown filter ───────────────────────────────────────────
+  useEffect(() => {
+    const q = nameQuery.toLowerCase().trim();
+    // Show all products on empty query OR when code is "0" (browse-all trigger)
+    const results = products
+      .filter((p) => p.isActive && (
+        !q || p.name.toLowerCase().includes(q) || p.productCode.toLowerCase().startsWith(q)
+      ))
+      .slice(0, 12);
+    setNameDrop(results);
+    setNameDropIdx(0);
+    setShowNameDrop(results.length > 0);
+  }, [nameQuery, products]);
 
-  const lines     = cart.map((item) => { const base = r2(item.quantity * item.rate); return { base, cgst: r2(base * item.gstRate / 200), sgst: r2(base * item.gstRate / 200) }; });
-  const subtotal  = r2(lines.reduce((s, l) => s + l.base, 0));
-  const rawCgst   = r2(lines.reduce((s, l) => s + l.cgst, 0));
-  const rawSgst   = r2(lines.reduce((s, l) => s + l.sgst, 0));
+  // ── Totals calculation ─────────────────────────────────────────────────────
+  const lineCalc = lines.map((l) => {
+    const base = r2(l.quantity * l.rate);
+    return { base, cgst: r2(base * l.gstRate / 200), sgst: r2(base * l.gstRate / 200) };
+  });
+  const subtotal  = r2(lineCalc.reduce((s, l) => s + l.base, 0));
+  const rawCgst   = r2(lineCalc.reduce((s, l) => s + l.cgst, 0));
+  const rawSgst   = r2(lineCalc.reduce((s, l) => s + l.sgst, 0));
   const afterDisc = r2(subtotal - discountAmount);
   const ratio     = subtotal > 0 ? afterDisc / subtotal : 1;
   const cgst      = r2(rawCgst * ratio);
@@ -367,8 +642,316 @@ export default function BillingPage() {
   const preGrand  = r2(afterDisc + cgst + sgst);
   const roundOff  = r2(Math.round(preGrand) - preGrand);
   const grandTotal = r2(preGrand + roundOff);
-  const cashAmt    = parseFloat(cashReceived) || 0;
-  const cashChange = paymentMode === 'cash' && cashAmt >= grandTotal ? r2(cashAmt - grandTotal) : 0;
+  const cashAmt   = parseFloat(cashReceived) || 0;
+  const cashChange = payMode === 'cash' && cashAmt >= grandTotal ? r2(cashAmt - grandTotal) : 0;
+
+  // Counter stock minus what's already in bill
+  function availableQty(productId: number): number {
+    const inBill = lines.filter((l) => l.productId === productId).reduce((s, l) => s + l.quantity, 0);
+    return r2((stockMap[productId] ?? 0) - inBill);
+  }
+
+  // Code cell all-products dropdown (shown when value is empty or "0")
+  const [showCodeDrop,  setShowCodeDrop]  = useState(false);
+  const [codeDrop,      setCodeDrop]      = useState<Product[]>([]);
+  const [codeDropIdx,   setCodeDropIdx]   = useState(0);
+  const [codeDropQuery, setCodeDropQuery] = useState('');
+
+  useEffect(() => {
+    const q = codeDropQuery.trim().toLowerCase();
+    // show all when empty/0, or filter by code prefix / name
+    const show = q === '' || q === '0';
+    const results = products
+      .filter((p) => p.isActive && (
+        show || p.productCode.toLowerCase().startsWith(q) || p.name.toLowerCase().includes(q)
+      ))
+      .slice(0, 12);
+    setCodeDrop(results);
+    setCodeDropIdx(0);
+    setShowCodeDrop(results.length > 0 && showCodeDrop);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codeDropQuery, products, showCodeDrop]);
+
+  function clearEntryRow() {
+    setEntryCode('');
+    setEntryProduct(null);
+    setEntryQtyRaw('');
+    setEntryNotes('');
+    setEntryError('');
+    setNameQuery('');
+    setShowNameDrop(false);
+    setShowCodeDrop(false);
+    setCodeDropQuery('');
+  }
+
+  function selectProductForEntry(p: Product) {
+    setEntryProduct(p);
+    setEntryCode(p.productCode);
+    setNameQuery(p.name);
+    setShowNameDrop(false);
+    setShowCodeDrop(false);
+    setCodeDropQuery(p.productCode);
+    // pre-fill quantity
+    if (!p.isWeighed) {
+      setEntryQtyRaw('1');
+    } else {
+      setEntryQtyRaw('');
+    }
+    setEntryError('');
+    setTimeout(() => { qtyRef.current?.focus(); qtyRef.current?.select(); }, 30);
+  }
+
+  function lookupByCode(code: string): Product | undefined {
+    return products.find((p) => p.isActive && p.productCode.toLowerCase() === code.toLowerCase());
+  }
+
+  function addLineFromProduct(p: Product, qty: number, notes = '') {
+    const available = availableQty(p.id);
+    if (stockBlockZero && available <= 0) {
+      setEntryError(`"${p.name}" is out of stock`);
+      return false;
+    }
+    if (available > 0 && qty > available) {
+      if (!stockBlockZero) {
+        setEntryError(`Only ${available.toFixed(2)} ${shortUnit(p.sellingUnit)} available — adding anyway`);
+      } else {
+        setEntryError(`Only ${available.toFixed(2)} ${shortUnit(p.sellingUnit)} available`);
+        return false;
+      }
+    }
+    setLines((prev) => {
+      const idx = prev.findIndex((l) => l.productId === p.id);
+      if (idx !== -1) {
+        // merge: add qty
+        return prev.map((l, i) => i === idx ? { ...l, quantity: r2(l.quantity + qty) } : l);
+      }
+      return [...prev, {
+        productId: p.id, productCode: p.productCode, name: p.name,
+        quantity: qty, unit: p.sellingUnit, rate: p.sellingPrice,
+        gstRate: p.gstRate ?? 0, hsnCode: p.hsnCode ?? undefined,
+        foodType: p.foodType, notes,
+      }];
+    });
+    return true;
+  }
+
+  function commitEntry() {
+    if (!entryProduct) { setEntryError('Select a product first'); return; }
+    const qty = parseQty(entryQtyRaw, entryProduct.sellingUnit);
+    if (qty === null || qty <= 0) {
+      setEntryError(entryProduct.isWeighed ? 'Enter weight (e.g. 0.5 or 500g)' : 'Enter a valid quantity');
+      return;
+    }
+    const ok = addLineFromProduct(entryProduct, qty, entryNotes.trim());
+    if (ok || !stockBlockZero) {
+      clearEntryRow();
+      setTimeout(() => { codeRef.current?.focus(); }, 30);
+    }
+  }
+
+  function onCodeKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Escape') { clearEntryRow(); return; }
+    if (e.key === 'Tab' || e.key === 'Enter') {
+      e.preventDefault();
+      const raw = entryCode.trim();
+      if (!raw) { qtyRef.current?.focus(); return; }
+
+      // multi-code mode: "001*2 005 012*3"
+      if (/\s/.test(raw)) {
+        const tokens = parseCodeString(raw);
+        let allOk = true;
+        for (const { code, qty } of tokens) {
+          const p = lookupByCode(code);
+          if (!p) { setEntryError(`Code "${code}" not found`); allOk = false; break; }
+          addLineFromProduct(p, qty);
+        }
+        if (allOk) clearEntryRow();
+        return;
+      }
+
+      // single code*qty: "001*3"
+      const multiMatch = raw.match(/^(\d+)\*(\d+\.?\d*)$/);
+      if (multiMatch) {
+        const code = multiMatch[1].padStart(3, '0');
+        const qty  = parseFloat(multiMatch[2]);
+        const p    = lookupByCode(code);
+        if (!p) { setEntryError(`Code "${code}" not found`); return; }
+        addLineFromProduct(p, qty);
+        clearEntryRow();
+        return;
+      }
+
+      // plain code lookup
+      const p = lookupByCode(raw);
+      if (p) {
+        selectProductForEntry(p);
+      } else {
+        setEntryError(`Code "${raw}" not found`);
+      }
+    }
+  }
+
+  function onQtyKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Escape') { clearEntryRow(); codeRef.current?.focus(); return; }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      // validate immediately on enter
+      if (!entryProduct) return;
+      const qty = parseQty(entryQtyRaw, entryProduct.sellingUnit);
+      if (qty === null || qty <= 0) {
+        setEntryError(entryProduct.isWeighed ? 'Enter weight (e.g. 0.5 or 500g)' : 'Enter a valid quantity');
+        return;
+      }
+      const available = availableQty(entryProduct.id);
+      if (stockBlockZero && available <= 0) {
+        setEntryError(`"${entryProduct.name}" is out of stock`);
+        return;
+      }
+      if (qty > available && available > 0) {
+        if (stockBlockZero) { setEntryError(`Only ${available.toFixed(2)} available`); return; }
+        setEntryError(`Only ${available.toFixed(2)} ${shortUnit(entryProduct.sellingUnit)} available — adding anyway`);
+      } else {
+        setEntryError('');
+      }
+      commitEntry();
+    }
+  }
+
+  function onNameKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Escape') { clearEntryRow(); codeRef.current?.focus(); return; }
+    if (e.key === 'ArrowDown') { setNameDropIdx((i) => Math.min(i + 1, nameDrop.length - 1)); return; }
+    if (e.key === 'ArrowUp')   { setNameDropIdx((i) => Math.max(i - 1, 0)); return; }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      if (nameDrop[nameDropIdx]) selectProductForEntry(nameDrop[nameDropIdx]);
+    }
+  }
+
+  // ── Today summary helpers ──────────────────────────────────────────────────
+
+  const todayTakeaway  = todayBills.filter((b) => b.orderType === 'takeaway');
+  const todayDelivery  = todayBills.filter((b) => b.orderType === 'delivery');
+
+  // Scope cashier to their own bills
+  const visibleTakeaway = isOwner ? todayTakeaway : todayTakeaway.filter((b) => b.cashierName === cashierName);
+  const visibleDelivery = isOwner ? todayDelivery : todayDelivery.filter((b) => b.cashierName === cashierName);
+
+  const takeawayTotal   = visibleTakeaway.reduce((s, b) => s + b.grandTotal, 0);
+  const deliveryTotal   = visibleDelivery.reduce((s, b) => s + b.grandTotal, 0);
+
+  // ── Hold / Resume / Discard ────────────────────────────────────────────────
+
+  async function handleHold() {
+    if (!lines.length) return;
+    try {
+      const res = await billingApi.hold({
+        items: lines.map((l) => ({
+          productId: l.productId, name: l.name, quantity: l.quantity, unit: l.unit,
+          rate: l.rate, gstRate: l.gstRate, hsnCode: l.hsnCode,
+        })),
+        orderType,
+      });
+      const held: HeldBill = {
+        billId: res.data.billId,
+        invoiceNumber: res.data.invoiceNumber ?? `HOLD-${Date.now()}`,
+        grandTotal,
+        createdAt: new Date().toISOString(),
+        customerName: customer?.name,
+        orderType,
+        items: [...lines],
+        customerId: customer?.id,
+        customerPhone: customer?.phone,
+        discountAmount,
+        paymentMode: payMode,
+      };
+      setHeldBills((prev) => [...prev, held]);
+      startNewBill();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setErrorMsg(msg ?? 'Failed to hold bill');
+    }
+  }
+
+  function resumeHeld(held: HeldBill) {
+    if (lines.length > 0) {
+      if (!window.confirm('Hold the current bill and resume this one?')) return;
+      handleHold();
+    }
+    setLines(held.items);
+    setOrderType(held.orderType as 'takeaway' | 'delivery');
+    setDiscountAmount(held.discountAmount);
+    setPayMode(held.paymentMode);
+    if (held.customerId) {
+      setCustomer({ id: held.customerId, name: held.customerName ?? '', phone: held.customerPhone ?? '', loyaltyPoints: 0 });
+      setCustQuery(`${held.customerName}  ·  ${held.customerPhone ?? ''}`);
+    }
+    setHeldBills((prev) => prev.filter((h) => h.billId !== held.billId));
+    setTimeout(() => codeRef.current?.focus(), 100);
+  }
+
+  function discardHeld(held: HeldBill) {
+    if (!window.confirm(`Discard held bill ${held.invoiceNumber}? This cannot be undone.`)) return;
+    setHeldBills((prev) => prev.filter((h) => h.billId !== held.billId));
+  }
+
+  // ── Checkout ───────────────────────────────────────────────────────────────
+
+  const blockReasons: string[] = [];
+  if (!lines.length) blockReasons.push('Add at least one item');
+  if (orderType === 'delivery' && !deliveryAddress.trim()) blockReasons.push('Enter delivery address');
+  if (orderType === 'delivery' && !customer) blockReasons.push('Select a customer');
+  if (payMode === 'cash' && cashAmt > 0 && cashAmt < grandTotal) blockReasons.push('Cash received is less than total');
+
+  async function handleCheckout() {
+    if (blockReasons.length || submitting) return;
+    setSubmitting(true);
+    setErrorMsg('');
+    try {
+      const res = await billingApi.create({
+        items: lines.map((l) => ({
+          productId: l.productId, name: l.name, quantity: l.quantity, unit: l.unit,
+          rate: l.rate, gstRate: l.gstRate, hsnCode: l.hsnCode, discountAmount: 0,
+        })),
+        payments: [{ paymentMode: payMode, amount: grandTotal }],
+        customerId: customer?.id,
+        customerName: customer?.name ?? undefined,
+        customerPhone: customer?.phone ?? undefined,
+        totalDiscount: discountAmount,
+        orderType,
+        deliveryAddress: orderType === 'delivery' ? deliveryAddress : undefined,
+        cashierName,
+      });
+      const bill: CompletedBill = {
+        billId: res.data.billId,
+        invoiceNumber: res.data.invoiceNumber,
+        grandTotal: res.data.grandTotal,
+      };
+      setCompletedBill(bill);
+      printBill(bill.billId, receiptPaper);
+      refreshStock();
+      refreshTodayBills();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setErrorMsg(msg ?? 'Failed to create bill. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function startNewBill() {
+    setLines([]);
+    setCustomer(null); setCustQuery('');
+    setDiscountAmount(0); setDiscountInput('');
+    setCashReceived('');
+    setCompletedBill(null);
+    setErrorMsg('');
+    setOrderType('takeaway');
+    setDeliveryAddress('');
+    setDeliveryPhone('');
+    setPayMode('cash');
+    clearEntryRow();
+    setTimeout(() => codeRef.current?.focus(), 100);
+  }
 
   function applyDiscount() {
     const v = parseFloat(discountInput);
@@ -376,373 +959,808 @@ export default function BillingPage() {
     setShowDiscountInput(false);
   }
 
-  async function handleCheckout() {
-    if (!cart.length || submitting) return;
-    if (paymentMode === 'cash' && cashAmt > 0 && cashAmt < grandTotal) { setErrorMsg('Cash received is less than the total.'); return; }
-    setSubmitting(true); setErrorMsg('');
-    try {
-      const res = await billingApi.create({
-        items: cart.map((i) => ({ productId: i.productId, name: i.name, quantity: i.quantity, unit: i.unit, rate: i.rate, gstRate: i.gstRate, hsnCode: i.hsnCode, discountAmount: 0 })),
-        payments: [{ paymentMode, amount: grandTotal }],
-        customerId: customer?.id, customerName: customer?.name, customerPhone: customer?.phone,
-        totalDiscount: discountAmount, orderType,
-      });
-      const bill: CompletedBill = { billId: res.data.billId, invoiceNumber: res.data.invoiceNumber, grandTotal: res.data.grandTotal };
-      setCompletedBill(bill);
-      printBill(bill.billId, receiptPaper);
-      refreshStock();
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setErrorMsg(msg ?? 'Failed to create bill. Please try again.');
-    } finally { setSubmitting(false); }
-  }
+  // ── Next bill number preview ───────────────────────────────────────────────
+  const [nextBillNo, setNextBillNo] = useState('—');
+  useEffect(() => {
+    if (!USE_MOCK) return;
+    import('@/store/demoStore').then(({ bills }) => {
+      const count = bills.list().length + 1;
+      setNextBillNo(`INV-FY2026-27-${String(count).padStart(5, '0')}`);
+    });
+  }, [completedBill]);
 
-  function startNewBill() {
-    setCart([]); setCustomer(null); setCustomerQuery('');
-    setDiscountAmount(0); setDiscountInput(''); setSearch('');
-    setCashReceived(''); setCompletedBill(null); setErrorMsg('');
-    setTimeout(() => searchRef.current?.focus(), 100);
-  }
+  // ── Live price preview for entry row ──────────────────────────────────────
+  const entryQtyParsed = entryProduct ? (parseQty(entryQtyRaw, entryProduct.sellingUnit) ?? 0) : 0;
+  const entryLinePrice = entryProduct ? r2(entryQtyParsed * entryProduct.sellingPrice) : 0;
 
-  // Group products by category for Assure POS layout
-  const productsByCategory = categories
-    .filter((cat) => (catCount[cat.id] ?? 0) > 0)
-    .map((cat) => ({
-      cat,
-      items: products.filter((p) =>
-        p.isActive && p.categoryId === cat.id &&
-        (search.trim()
-          ? p.name.toLowerCase().includes(search.trim().toLowerCase()) || p.productCode?.toLowerCase().startsWith(search.trim().toLowerCase())
-          : activeCategory === null || activeCategory === cat.id)
-      ),
-    }))
-    .filter((g) => g.items.length > 0);
+  // ── Compact mode (< 1100px) for summary panel ─────────────────────────────
+  const [compact, setCompact] = useState(window.innerWidth < 1100);
+  useEffect(() => {
+    const handler = () => setCompact(window.innerWidth < 1100);
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
 
+  // ───────────────────────────── RENDER ─────────────────────────────────────
   return (
-    <div style={{ display: 'flex', height: '100%', minHeight: 0, background: '#F2EDE8', position: 'relative' }}>
+    <div style={{ display: 'flex', height: '100%', minHeight: 0, background: T.bg, position: 'relative', fontFamily: 'inherit' }}>
 
-      {weightProduct && (
-        <WeightDialog product={weightProduct} onConfirm={(qty) => addToCart(weightProduct, qty)} onClose={() => setWeightProduct(null)} />
+      {/* ── Overlays ── */}
+      {showShortcuts && <ShortcutsOverlay onClose={() => setShowShortcuts(false)} />}
+      {showBrowse && (
+        <BrowseDrawer
+          products={products}
+          categories={categories}
+          stockMap={stockMap}
+          cartLines={lines}
+          onSelect={(p) => selectProductForEntry(p)}
+          onClose={() => setShowBrowse(false)}
+        />
+      )}
+      {drawerType && (
+        <BillsDrawer
+          title={drawerType === 'takeaway' ? "Today's Take-away" : "Today's Home Delivery"}
+          bills={drawerType === 'takeaway' ? visibleTakeaway : visibleDelivery}
+          onClose={() => setDrawerType(null)}
+          onReprint={(id) => printBill(id, receiptPaper)}
+        />
       )}
       {completedBill && (
-        <SuccessPanel bill={completedBill} cashReceived={cashAmt} grandTotal={completedBill.grandTotal}
-          onNewBill={startNewBill} onViewBill={() => window.open(`/bills/${completedBill.billId}/print`, '_blank')}
-          onPrint={() => printBill(completedBill.billId, receiptPaper)} />
+        <SuccessPanel
+          bill={completedBill}
+          cashReceived={cashAmt}
+          grandTotal={completedBill.grandTotal}
+          onNewBill={startNewBill}
+          onViewBill={() => window.open(`/bills/${completedBill.billId}/print`, '_blank')}
+          onPrint={() => printBill(completedBill.billId, receiptPaper)}
+        />
       )}
 
-      {/* ═══ LEFT — PRODUCT BROWSER ═══════════════════════════════════════ */}
-      <div style={{ display: 'flex', flex: 1, minWidth: 0, flexDirection: 'column', overflow: 'hidden' }}>
-
-        {/* Search + category chips */}
-        <div style={{ flexShrink: 0, background: '#fff', borderBottom: '1px solid #EADFD0', padding: '8px 12px 6px' }}>
-          <div style={{ position: 'relative', marginBottom: 6 }}>
-            <svg style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#7A6A5F" strokeWidth="2.2">
-              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            <input ref={searchRef} type="text" value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={onSearchKey}
-              placeholder="Type code or name  (Ctrl+K)"
-              style={{ width: '100%', height: 40, fontSize: 15, paddingLeft: 36, paddingRight: 36, border: '1.5px solid #EADFD0', borderRadius: 10, outline: 'none', background: '#F8F5F0', color: '#1F1611', boxSizing: 'border-box' }}
-              onFocus={(e) => { e.currentTarget.style.borderColor = '#E8590C'; e.currentTarget.style.background = '#fff'; }}
-              onBlur={(e)  => { e.currentTarget.style.borderColor = '#EADFD0'; e.currentTarget.style.background = '#F8F5F0'; }} />
-            {search && (
-              <button onClick={() => { setSearch(''); searchRef.current?.focus(); }} aria-label="Clear"
-                style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#7A6A5F', display: 'flex' }}>
-                <X size={15} />
-              </button>
-            )}
+      {/* ══════════════ LEFT — TODAY SUMMARY ══════════════════════════════════ */}
+      {!compact ? (
+        <aside style={{
+          width: 300, minWidth: 300, display: 'flex', flexDirection: 'column',
+          background: T.surface, borderRight: `1px solid ${T.border}`,
+          overflowY: 'auto',
+        }}>
+          {/* Header */}
+          <div style={{ padding: '16px 18px 10px', borderBottom: `1px solid ${T.border}` }}>
+            <div style={{ fontSize: 17, fontWeight: 700, color: T.text }}>Today</div>
+            <div style={{ fontSize: 13, color: T.muted }}>
+              {new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+            </div>
           </div>
-          <div style={{ display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none', paddingBottom: 2 }}>
-            <button onClick={() => setActiveCategory(null)}
-              style={{ height: 30, padding: '0 12px', borderRadius: 9999, border: '1.5px solid', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 600, cursor: 'pointer', flexShrink: 0,
-                ...(activeCategory === null ? { background: '#E8590C', color: '#fff', borderColor: '#E8590C' } : { background: '#FEE8D5', color: '#C44A06', borderColor: '#FBCEB1' }) }}>
-              All ({products.filter((p) => p.isActive).length})
+
+          {/* Summary cards */}
+          <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {/* Take-away */}
+            <button onClick={() => setDrawerType('takeaway')} style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+              background: '#E8F5E9', borderRadius: 12, padding: '12px 14px',
+              border: 'none', cursor: 'pointer', textAlign: 'left', width: '100%',
+            }}>
+              <Package size={22} color={T.green} strokeWidth={2} />
+              <div>
+                <div style={{ fontSize: 13, color: T.muted }}>Take-away</div>
+                <div style={{ fontSize: 28, fontWeight: 700, color: T.text, lineHeight: 1.1, fontVariantNumeric: 'tabular-nums' }}>
+                  {visibleTakeaway.length}
+                </div>
+                <div style={{ fontSize: 12, color: T.muted, fontVariantNumeric: 'tabular-nums' }}>
+                  {fmt(takeawayTotal)}
+                </div>
+              </div>
             </button>
-            {categories.map((cat) => {
-              const st = cs(cat.name); const active = activeCategory === cat.id;
-              return (
-                <button key={cat.id} onClick={() => setActiveCategory(active ? null : cat.id)}
-                  style={{ height: 30, padding: '0 12px', borderRadius: 9999, border: '1.5px solid', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 600, cursor: 'pointer', flexShrink: 0,
-                    ...(active ? { background: st.chipActiveBg, color: st.chipActiveText, borderColor: st.chipActiveBg } : { background: st.chipBg, color: st.chipText, borderColor: `${st.border}44` }) }}>
-                  {cat.name} ({catCount[cat.id] ?? 0})
-                </button>
-              );
-            })}
-          </div>
-          {codeFlash && <p style={{ marginTop: 4, fontSize: 13, fontWeight: 600, color: codeFlash.startsWith('✓') ? '#4F7F4A' : '#C0392B' }}>{codeFlash}</p>}
-        </div>
 
-        {/* Category sections with product tiles */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {loadingData ? (
-            <div style={{ display: 'flex', height: 200, alignItems: 'center', justifyContent: 'center', color: '#7A6A5F', gap: 10 }}>
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="animate-spin"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
-              Loading products…
-            </div>
-          ) : productsByCategory.length === 0 ? (
-            <div style={{ display: 'flex', height: 200, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#7A6A5F' }}>
-              <ShoppingBag size={36} strokeWidth={1.5} />
-              <p style={{ fontSize: 16 }}>{search ? <>No match for "<strong>{search}</strong>"</> : 'No products'}</p>
-            </div>
-          ) : (
-            productsByCategory.map(({ cat, items }) => {
-              const catStyle = cs(cat.name);
-              return (
-                <div key={cat.id}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: catStyle.bg, border: `1px solid ${catStyle.border}33`, borderLeft: `4px solid ${catStyle.border}`, borderRadius: '10px 10px 0 0', padding: '7px 14px' }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: catStyle.price, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{cat.name}</span>
-                    <span style={{ fontSize: 11, color: catStyle.chipText, background: `${catStyle.border}22`, borderRadius: 9999, padding: '1px 8px', fontWeight: 600 }}>{items.length} items</span>
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '8px 10px', background: '#fff', border: `1px solid ${catStyle.border}22`, borderTop: 'none', borderRadius: '0 0 10px 10px' }}>
-                    {items.map((product) => {
-                      const cartItem  = cart.find((x) => x.productId === product.id);
-                      const inCart    = cartItem != null;
-                      const cartIdx   = cart.findIndex((x) => x.productId === product.id);
-                      const counterQty = (stockMap[product.id] ?? 0) - cart.filter((c) => c.productId === product.id).reduce((s, c) => s + c.quantity, 0);
-                      const outOfStock = counterQty <= 0;
-                      const lowStk    = (product as { lowStockLevel?: number | null }).lowStockLevel;
-                      const isLow     = lowStk != null && counterQty <= lowStk && counterQty > 0;
+            {/* Home delivery */}
+            <button onClick={() => setDrawerType('delivery')} style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+              background: '#EAF4FC', borderRadius: 12, padding: '12px 14px',
+              border: 'none', cursor: 'pointer', textAlign: 'left', width: '100%',
+            }}>
+              <Truck size={22} color="#1E8E94" strokeWidth={2} />
+              <div>
+                <div style={{ fontSize: 13, color: T.muted }}>Home Delivery</div>
+                <div style={{ fontSize: 28, fontWeight: 700, color: T.text, lineHeight: 1.1, fontVariantNumeric: 'tabular-nums' }}>
+                  {visibleDelivery.length}
+                </div>
+                <div style={{ fontSize: 12, color: T.muted, fontVariantNumeric: 'tabular-nums' }}>
+                  {fmt(deliveryTotal)}
+                </div>
+              </div>
+            </button>
 
-                      return (
-                        <button key={product.id} onClick={() => !outOfStock && handleCardClick(product)}
-                          title={`${product.name} — ${fmt(product.sellingPrice)} / ${product.sellingUnit}`}
-                          style={{
-                            position: 'relative', width: 88, minHeight: 72,
-                            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                            padding: '6px 4px 4px', textAlign: 'center',
-                            background: inCart ? catStyle.bg : '#FAFAF8',
-                            border: `1.5px solid ${inCart ? catStyle.border : '#E8E3DD'}`,
-                            borderRadius: 8, cursor: outOfStock ? 'not-allowed' : 'pointer',
-                            opacity: outOfStock ? 0.45 : 1, transition: 'border-color 80ms, background 80ms',
-                          }}
-                          onMouseEnter={(e) => { if (!outOfStock) (e.currentTarget as HTMLElement).style.borderColor = catStyle.border; }}
-                          onMouseLeave={(e) => { if (!inCart) (e.currentTarget as HTMLElement).style.borderColor = '#E8E3DD'; }}
-                        >
-                          <span style={{ fontSize: 11, fontWeight: 700, color: catStyle.badge, background: `${catStyle.badge}18`, borderRadius: 5, padding: '1px 5px', marginBottom: 3, lineHeight: 1.4 }}>{product.productCode}</span>
-                          <span style={{ fontSize: 11, fontWeight: 600, color: '#1F1611', lineHeight: 1.25, wordBreak: 'break-word', maxWidth: '100%' }}>
-                            {product.name.length > 18 ? product.name.slice(0, 17) + '…' : product.name}
-                          </span>
-                          <span style={{ fontSize: 12, fontWeight: 700, color: catStyle.price, marginTop: 3, fontVariantNumeric: 'tabular-nums' }}>{fmt(product.sellingPrice)}</span>
-                          {inCart && (
-                            <span style={{ position: 'absolute', top: -6, right: -6, background: '#E8590C', color: '#fff', borderRadius: 9999, fontSize: 10, fontWeight: 800, padding: '1px 5px', lineHeight: 1.4, border: '1.5px solid #fff' }}>
-                              ×{cartItem.unit === 'kg' ? cartItem.quantity.toFixed(1) : cartItem.quantity}
-                            </span>
-                          )}
-                          {!inCart && isLow && <span style={{ fontSize: 9, color: '#D9822B', fontWeight: 700, marginTop: 1 }}>LOW</span>}
-                          {inCart && !product.isWeighed && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginTop: 4 }} onClick={(e) => e.stopPropagation()}>
-                              <button onClick={(e) => { e.stopPropagation(); cartItem.quantity <= 1 ? removeItem(cartIdx) : updateQty(cartIdx, -1); }}
-                                style={{ width: 20, height: 20, borderRadius: 4, border: 'none', cursor: 'pointer', background: '#E8E0D8', color: '#6B5B52', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <Minus size={10} />
-                              </button>
-                              <span style={{ fontSize: 12, fontWeight: 700, color: '#1F1611', minWidth: 14, textAlign: 'center' }}>{cartItem.quantity}</span>
-                              <button onClick={(e) => { e.stopPropagation(); updateQty(cartIdx, 1); }}
-                                style={{ width: 20, height: 20, borderRadius: 4, border: 'none', cursor: 'pointer', background: '#E8E0D8', color: '#6B5B52', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <Plus size={10} />
-                              </button>
-                            </div>
-                          )}
-                        </button>
-                      );
-                    })}
+            {/* On Hold */}
+            <div style={{
+              background: '#FFF1DC', borderRadius: 12, padding: '12px 14px',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: heldBills.length ? 10 : 0 }}>
+                <Clock size={22} color={T.amber} strokeWidth={2} />
+                <div>
+                  <div style={{ fontSize: 13, color: T.muted }}>On Hold</div>
+                  <div style={{ fontSize: 28, fontWeight: 700, color: T.text, lineHeight: 1.1 }}>
+                    {heldBills.length}
                   </div>
                 </div>
-              );
-            })
-          )}
-        </div>
-      </div>
+              </div>
 
-      {/* ═══ RIGHT — BILL PANEL ═══════════════════════════════════════════ */}
-      <div style={{ width: 440, minWidth: 380, display: 'flex', flexDirection: 'column', background: '#fff', borderLeft: '1px solid #EADFD0', minHeight: 0, height: '100%' }}>
+              {heldBills.map((h) => (
+                <div key={h.billId} style={{
+                  background: '#fff8ee', borderRadius: 8, padding: '10px 10px', marginTop: 8,
+                  border: `1px solid #F5C88A`,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {/* Bill ref + time */}
+                      <div style={{ fontSize: 11, fontWeight: 700, color: T.text, fontFamily: 'monospace' }}>
+                        {h.invoiceNumber}
+                      </div>
+                      <div style={{ fontSize: 11, color: T.muted }}>
+                        {new Date(h.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                        {' · '}
+                        <span style={{ textTransform: 'capitalize' }}>{h.orderType}</span>
+                      </div>
 
-        {/* Bill header */}
-        <div style={{ flexShrink: 0, padding: '10px 14px 8px', borderBottom: '1px solid #EADFD0', background: '#FBF6EE' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <ShoppingBag size={18} color="#E8590C" />
-              <span style={{ fontSize: 17, fontWeight: 700, color: '#1F1611' }}>Current Bill</span>
-              {cart.length > 0 && <span style={{ background: '#E8590C', color: '#fff', borderRadius: 9999, padding: '1px 8px', fontSize: 12, fontWeight: 700 }}>{cart.length} item{cart.length !== 1 ? 's' : ''}</span>}
-            </div>
-            <div style={{ display: 'flex', gap: 6 }}>
-              {(['takeaway', 'dine-in'] as const).map((t) => (
-                <button key={t} onClick={() => setOrderType(t)}
-                  style={{ height: 28, padding: '0 10px', borderRadius: 7, border: '1.5px solid', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                    ...(orderType === t ? { background: '#E8590C', color: '#fff', borderColor: '#E8590C' } : { background: '#fff', color: '#7A6A5F', borderColor: '#EADFD0' }) }}>
-                  {t === 'dine-in' ? 'Dine-in' : 'Takeaway'}
-                </button>
+                      {/* Customer name (prominent) */}
+                      {h.customerName ? (
+                        <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginTop: 4 }}>
+                          👤 {h.customerName}
+                          {h.customerPhone && <span style={{ fontSize: 11, fontWeight: 400, color: T.muted, marginLeft: 5 }}>{h.customerPhone}</span>}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 12, color: T.muted, marginTop: 3, fontStyle: 'italic' }}>Walk-in</div>
+                      )}
+
+                      {/* Items list */}
+                      <div style={{ marginTop: 5 }}>
+                        {h.items.slice(0, 4).map((item, i) => (
+                          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: T.text, lineHeight: 1.5 }}>
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>
+                              {item.name}
+                            </span>
+                            <span style={{ color: T.muted, fontVariantNumeric: 'tabular-nums', flexShrink: 0, marginLeft: 4 }}>
+                              ×{item.unit === 'kg' ? item.quantity.toFixed(2) : item.quantity} {item.unit === 'kg' ? 'kg' : ''}
+                            </span>
+                          </div>
+                        ))}
+                        {h.items.length > 4 && (
+                          <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>+{h.items.length - 4} more items</div>
+                        )}
+                      </div>
+
+                      {/* Total */}
+                      <div style={{ fontSize: 14, fontWeight: 800, color: T.amber, fontVariantNumeric: 'tabular-nums', marginTop: 5 }}>
+                        {fmt(h.grandTotal)}
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginLeft: 8, flexShrink: 0 }}>
+                      <button onClick={() => resumeHeld(h)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 4, height: 30, padding: '0 10px', borderRadius: 6, border: 'none', background: T.amber, color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}>
+                        <RotateCcw size={12} /> Resume
+                      </button>
+                      {isOwner && (
+                        <button onClick={() => discardHeld(h)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 4, height: 28, padding: '0 8px', borderRadius: 6, border: 'none', background: '#FDE5E0', color: T.red, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>
+                          <Trash2 size={11} /> Discard
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
           </div>
+        </aside>
+      ) : (
+        /* Compact chip row above the table */
+        <div style={{
+          position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10,
+          background: T.surface, borderBottom: `1px solid ${T.border}`,
+          display: 'flex', gap: 8, padding: '6px 12px', alignItems: 'center',
+        }}>
+          <button onClick={() => setDrawerType('takeaway')}
+            style={{ height: 30, padding: '0 12px', borderRadius: 9999, background: '#E8F5E9', color: T.green, border: 'none', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+            Take-away: {visibleTakeaway.length} ({fmt(takeawayTotal)})
+          </button>
+          <button onClick={() => setDrawerType('delivery')}
+            style={{ height: 30, padding: '0 12px', borderRadius: 9999, background: '#EAF4FC', color: '#1E8E94', border: 'none', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+            Delivery: {visibleDelivery.length} ({fmt(deliveryTotal)})
+          </button>
+          <button style={{ height: 30, padding: '0 12px', borderRadius: 9999, background: '#FFF1DC', color: T.amber, border: 'none', fontSize: 12, fontWeight: 700, cursor: 'default' }}>
+            Hold: {heldBills.length}
+          </button>
+        </div>
+      )}
+
+      {/* ══════════════ RIGHT — BILL ═══════════════════════════════════════════ */}
+      <div style={{
+        flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column',
+        paddingTop: compact ? 44 : 0,
+        overflow: 'hidden',
+      }}>
+
+        {/* ── Bill header (single compact row) ── */}
+        <div style={{
+          flexShrink: 0, background: T.surface,
+          borderBottom: `1px solid ${T.border}`,
+          padding: '8px 16px', display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center',
+        }}>
+          {/* Order type */}
+          <div style={{ display: 'flex', background: T.bg, borderRadius: 9999, padding: 2 }}>
+            {(['takeaway', 'delivery'] as const).map((t) => (
+              <button key={t} onClick={() => setOrderType(t)}
+                style={{
+                  height: 34, padding: '0 14px', borderRadius: 9999,
+                  border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600,
+                  background: orderType === t ? T.brand : 'transparent',
+                  color: orderType === t ? '#fff' : T.muted,
+                  transition: 'background 120ms',
+                }}>
+                {t === 'takeaway' ? 'Take-away' : 'Home Delivery'}
+              </button>
+            ))}
+          </div>
+
+          {/* Employee (read-only) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 13, color: T.muted, minWidth: 100 }}>
+            <span style={{ fontWeight: 600, color: T.text }}>{cashierName}</span>
+          </div>
 
           {/* Customer search */}
-          <div style={{ position: 'relative' }}>
-            <input ref={custRef} type="text" value={customerQuery} onChange={(e) => { setCustomerQuery(e.target.value); if (customer) clearCustomer(); }}
-              placeholder="Customer name or phone (F4)"
-              style={{ width: '100%', height: 34, fontSize: 13, padding: '0 30px 0 10px', border: '1.5px solid #EADFD0', borderRadius: 8, background: '#fff', color: '#1F1611', outline: 'none', boxSizing: 'border-box' }}
-              onFocus={(e) => (e.currentTarget.style.borderColor = '#E8590C')} onBlur={(e) => (e.currentTarget.style.borderColor = '#EADFD0')} />
+          <div style={{ position: 'relative', flex: 1, minWidth: 160 }}>
+            <input
+              ref={custRef}
+              value={custQuery}
+              onChange={(e) => { setCustQuery(e.target.value); if (customer) { setCustomer(null); } }}
+              placeholder="Customer — phone or name (F4)"
+              style={{
+                width: '100%', height: 36, fontSize: 14, padding: '0 28px 0 10px',
+                border: `1.5px solid ${T.border}`, borderRadius: 9999,
+                background: T.bg, color: T.text, outline: 'none', boxSizing: 'border-box',
+              }}
+              onFocus={(e) => (e.currentTarget.style.borderColor = T.brand)}
+              onBlur={(e)  => (e.currentTarget.style.borderColor = T.border)}
+            />
             {customer && (
-              <button onClick={clearCustomer} style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#C0392B', display: 'flex' }}>
+              <button onClick={() => { setCustomer(null); setCustQuery(''); setShowCustDrop(false); }}
+                style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: T.red, display: 'flex' }}>
                 <X size={14} />
               </button>
             )}
-            {showCustDropdown && customerResults.length > 0 && (
-              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 40, background: '#fff', border: '1px solid #EADFD0', borderRadius: 10, boxShadow: '0 4px 16px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
-                {customerResults.map((c) => (
-                  <button key={c.id} onClick={() => selectCustomer(c)}
-                    style={{ width: '100%', padding: '9px 14px', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', display: 'block', fontSize: 14, color: '#1F1611' }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = '#FBF6EE')} onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}>
+            {showCustDrop && custResults.length > 0 && (
+              <div style={{
+                position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, marginTop: 4,
+                background: '#fff', border: `1px solid ${T.border}`, borderRadius: 10,
+                boxShadow: '0 4px 16px rgba(0,0,0,0.08)', overflow: 'hidden',
+              }}>
+                {custResults.map((c) => (
+                  <button key={c.id}
+                    onClick={() => { setCustomer(c); setCustQuery(`${c.name} · ${c.phone}`); setShowCustDrop(false); }}
+                    style={{ display: 'flex', justifyContent: 'space-between', width: '100%', padding: '8px 14px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, color: T.text, textAlign: 'left' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = T.bg)}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}>
                     <span style={{ fontWeight: 600 }}>{c.name}</span>
-                    <span style={{ color: '#7A6A5F', marginLeft: 8 }}>{c.phone}</span>
-                    {c.loyaltyPoints > 0 && <span style={{ marginLeft: 8, fontSize: 12, color: '#C98B4B' }}>★ {c.loyaltyPoints} pts</span>}
+                    <span style={{ color: T.muted }}>{c.phone}</span>
                   </button>
                 ))}
               </div>
             )}
           </div>
 
-          {errorMsg && (
-            <div style={{ background: '#FDE5E0', borderRadius: 8, padding: '6px 10px', marginTop: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 13, color: '#C0392B' }}>{errorMsg}</span>
-              <button onClick={() => setErrorMsg('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#C0392B' }}><X size={14} /></button>
-            </div>
-          )}
+          {/* Bill no. preview */}
+          <div style={{ fontSize: 12, color: T.muted, whiteSpace: 'nowrap' }}>
+            Bill: <span style={{ fontFamily: 'monospace', color: T.text, fontWeight: 600 }}>{nextBillNo}</span>
+          </div>
+
+          {/* Shortcut hint */}
+          <button onClick={() => setShowShortcuts(true)}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.muted, display: 'flex', alignItems: 'center' }}>
+            <HelpCircle size={16} />
+          </button>
         </div>
 
-        {/* Bill table */}
+        {/* Delivery address row (shown only for delivery) */}
+        {orderType === 'delivery' && (
+          <div style={{ flexShrink: 0, background: '#EAF4FC', borderBottom: `1px solid ${T.border}`, padding: '6px 16px', display: 'flex', gap: 10 }}>
+            <input
+              value={deliveryAddress}
+              onChange={(e) => setDeliveryAddress(e.target.value)}
+              placeholder="Delivery address *"
+              style={{ flex: 2, height: 36, fontSize: 14, padding: '0 10px', border: `1.5px solid ${T.border}`, borderRadius: 8, background: '#fff', color: T.text, outline: 'none' }}
+              onFocus={(e) => (e.currentTarget.style.borderColor = T.brand)}
+              onBlur={(e)  => (e.currentTarget.style.borderColor = T.border)}
+            />
+            <input
+              value={deliveryPhone}
+              onChange={(e) => setDeliveryPhone(e.target.value)}
+              placeholder="Phone"
+              style={{ flex: 1, height: 36, fontSize: 14, padding: '0 10px', border: `1.5px solid ${T.border}`, borderRadius: 8, background: '#fff', color: T.text, outline: 'none' }}
+              onFocus={(e) => (e.currentTarget.style.borderColor = T.brand)}
+              onBlur={(e)  => (e.currentTarget.style.borderColor = T.border)}
+            />
+          </div>
+        )}
+
+        {/* ── Bill table ── */}
         <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-          {cart.length === 0 ? (
-            <div style={{ display: 'flex', height: '100%', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#C4B5A8' }}>
-              <ShoppingBag size={40} strokeWidth={1.4} />
-              <p style={{ fontSize: 15, textAlign: 'center' }}>Tap a product to add it</p>
+          {loadingData ? (
+            <div style={{ display: 'flex', height: 120, alignItems: 'center', justifyContent: 'center', color: T.muted, gap: 10 }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="animate-spin"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
+              Loading…
             </div>
           ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15 }}>
               <thead>
-                <tr style={{ background: '#F5EFE8', borderBottom: '2px solid #E8DDD0', position: 'sticky', top: 0 }}>
-                  {['Code', 'Item', 'Rate', 'Qty', 'Price', ''].map((h) => (
-                    <th key={h} style={{ padding: '8px 8px', textAlign: h === 'Rate' || h === 'Qty' || h === 'Price' ? 'right' : 'left', fontSize: 12, fontWeight: 700, color: '#7A6A5F', whiteSpace: 'nowrap' }}>{h}</th>
+                <tr style={{ background: '#F5EFE8', borderBottom: `2px solid ${T.border}`, position: 'sticky', top: 0, zIndex: 5 }}>
+                  {['Code', 'Product Name', 'Rate', 'Qty', 'Price (₹)', 'Notes', ''].map((h) => (
+                    <th key={h} style={{
+                      padding: '9px 10px',
+                      textAlign: h === 'Rate' || h === 'Qty' || h === 'Price (₹)' ? 'right' : 'left',
+                      fontSize: 13, fontWeight: 700, color: T.muted, whiteSpace: 'nowrap',
+                    }}>
+                      {h}
+                    </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {cart.map((item, idx) => {
-                  const lineTax   = r2(item.quantity * item.rate * (item.gstRate ?? 0) / 100);
-                  const lineTotal = r2(item.quantity * item.rate + lineTax);
+                {/* ── ENTRY ROW (always first) ── */}
+                <tr style={{ background: '#FFFCF8', borderBottom: `1px solid ${T.border}` }}>
+                  {/* Code cell */}
+                  <td style={{ padding: '4px 6px', width: 90, position: 'relative' }}>
+                    <input
+                      ref={codeRef}
+                      value={entryCode}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setEntryCode(val);
+                        setCodeDropQuery(val);
+                        setShowCodeDrop(true);
+                        setEntryProduct(null);
+                        setEntryQtyRaw('');
+                        setEntryError('');
+                        // live preview while typing exact code
+                        const p = val.trim() ? lookupByCode(val.trim()) : null;
+                        if (p) { setEntryProduct(p); setNameQuery(p.name); }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'ArrowDown') { setCodeDropIdx((i) => Math.min(i + 1, codeDrop.length - 1)); return; }
+                        if (e.key === 'ArrowUp')   { setCodeDropIdx((i) => Math.max(i - 1, 0)); return; }
+                        if ((e.key === 'Enter' || e.key === 'Tab') && showCodeDrop && codeDrop[codeDropIdx] && !lookupByCode(entryCode.trim())) {
+                          e.preventDefault();
+                          selectProductForEntry(codeDrop[codeDropIdx]);
+                          return;
+                        }
+                        onCodeKeyDown(e);
+                      }}
+                      onFocus={() => { setShowCodeDrop(true); setCodeDropQuery(entryCode); (codeRef.current as HTMLInputElement | null)?.style && ((codeRef.current as HTMLInputElement).style.borderColor = T.brand); }}
+                      onBlur={() => { (codeRef.current as HTMLInputElement | null)?.style && ((codeRef.current as HTMLInputElement).style.borderColor = T.border); setTimeout(() => setShowCodeDrop(false), 180); }}
+                      placeholder="F2 or 0=all"
+                      style={{
+                        width: '100%', height: 44, fontSize: 16, padding: '0 8px',
+                        border: `1.5px solid ${T.border}`, borderRadius: 8,
+                        background: '#fff', color: T.text, outline: 'none',
+                        fontFamily: 'monospace',
+                      }}
+                    />
+                    {/* Code dropdown */}
+                    {showCodeDrop && codeDrop.length > 0 && (
+                      <div style={{
+                        position: 'absolute', top: '100%', left: 0, zIndex: 70, marginTop: 2,
+                        background: '#fff', border: `1px solid ${T.border}`, borderRadius: 10,
+                        boxShadow: '0 6px 20px rgba(0,0,0,0.12)', maxHeight: 260, overflowY: 'auto',
+                        minWidth: 300,
+                      }}>
+                        {codeDrop.map((p, i) => {
+                          const qty = availableQty(p.id);
+                          return (
+                            <button key={p.id} onMouseDown={() => selectProductForEntry(p)}
+                              style={{
+                                display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+                                padding: '8px 12px', border: 'none', cursor: 'pointer', textAlign: 'left',
+                                background: i === codeDropIdx ? T.bg : '#fff',
+                                fontSize: 14, color: T.text,
+                              }}
+                              onMouseEnter={() => setCodeDropIdx(i)}>
+                              <span style={{ fontFamily: 'monospace', fontSize: 13, color: T.brand, minWidth: 36, fontWeight: 700 }}>{p.productCode}</span>
+                              <VegDot type={p.foodType} />
+                              <span style={{ flex: 1, fontWeight: 600 }}>{p.name}</span>
+                              <span style={{ color: T.muted, fontSize: 13, fontVariantNumeric: 'tabular-nums', marginRight: 8 }}>{fmt(p.sellingPrice)}</span>
+                              <StockChip qty={qty} unit={p.sellingUnit} low={p.lowStockLevel} />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </td>
+
+                  {/* Product name cell with dropdown */}
+                  <td style={{ padding: '4px 6px', position: 'relative', minWidth: 200 }}>
+                    <input
+                      ref={nameRef}
+                      value={nameQuery}
+                      onChange={(e) => { setNameQuery(e.target.value); setEntryProduct(null); setEntryCode(''); setEntryError(''); }}
+                      onKeyDown={onNameKeyDown}
+                      onFocus={() => setShowNameDrop(true)}
+                      onBlur={() => setTimeout(() => setShowNameDrop(false), 200)}
+                      placeholder="Click or type name… (all on focus)"
+                      style={{
+                        width: '100%', height: entryProduct ? 32 : 44, fontSize: 15, padding: '0 8px',
+                        border: `1.5px solid ${T.border}`, borderRadius: 8,
+                        background: '#fff', color: T.text, outline: 'none',
+                        display: 'block',
+                      }}
+                      onFocusCapture={(e) => (e.currentTarget.style.borderColor = T.brand)}
+                      onBlurCapture={(e)  => (e.currentTarget.style.borderColor = T.border)}
+                    />
+                    {/* Product preview sub-line — inside cell, below input */}
+                    {entryProduct && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: T.muted, padding: '2px 8px 2px', lineHeight: 1.3 }}>
+                        <span style={{ fontVariantNumeric: 'tabular-nums' }}>{fmt(entryProduct.sellingPrice)} / {entryProduct.sellingUnit}</span>
+                        <StockChip qty={availableQty(entryProduct.id)} unit={entryProduct.sellingUnit} low={entryProduct.lowStockLevel} />
+                      </div>
+                    )}
+                    {/* Dropdown */}
+                    {showNameDrop && nameDrop.length > 0 && (
+                      <div style={{
+                        position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 60, marginTop: 2,
+                        background: '#fff', border: `1px solid ${T.border}`, borderRadius: 10,
+                        boxShadow: '0 6px 20px rgba(0,0,0,0.10)', maxHeight: 280, overflowY: 'auto',
+                      }}>
+                        {nameDrop.map((p, i) => {
+                          const qty = availableQty(p.id);
+                          return (
+                            <button key={p.id} onMouseDown={() => selectProductForEntry(p)}
+                              style={{
+                                display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+                                padding: '9px 14px', border: 'none', cursor: 'pointer', textAlign: 'left',
+                                background: i === nameDropIdx ? T.bg : '#fff',
+                                fontSize: 14, color: T.text,
+                              }}
+                              onMouseEnter={() => setNameDropIdx(i)}>
+                              <VegDot type={p.foodType} />
+                              <span style={{ fontFamily: 'monospace', fontSize: 12, color: T.brand, minWidth: 36 }}>{p.productCode}</span>
+                              <span style={{ flex: 1, fontWeight: 600 }}>{p.name}</span>
+                              <span style={{ fontVariantNumeric: 'tabular-nums', color: T.muted, marginRight: 8 }}>{fmt(p.sellingPrice)}</span>
+                              <StockChip qty={qty} unit={p.sellingUnit} low={p.lowStockLevel} />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </td>
+
+                  {/* Rate (read-only) */}
+                  <td style={{ padding: '4px 6px', textAlign: 'right', width: 90, color: T.muted, fontSize: 15, fontVariantNumeric: 'tabular-nums' }}>
+                    {entryProduct ? fmt(entryProduct.sellingPrice) : '—'}
+                  </td>
+
+                  {/* Qty input */}
+                  <td style={{ padding: '4px 6px', width: 110 }}>
+                    <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                      <input
+                        ref={qtyRef}
+                        value={entryQtyRaw}
+                        onChange={(e) => { setEntryQtyRaw(e.target.value); setEntryError(''); }}
+                        onKeyDown={onQtyKeyDown}
+                        placeholder={entryProduct?.isWeighed ? 'kg' : '1'}
+                        style={{
+                          width: '100%', height: 44, fontSize: 16, padding: '0 28px 0 8px',
+                          border: `1.5px solid ${T.border}`, borderRadius: 8,
+                          background: '#fff', color: T.text, outline: 'none',
+                          textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                        }}
+                        onFocus={(e) => { e.currentTarget.style.borderColor = T.brand; e.currentTarget.select(); }}
+                        onBlur={(e)  => (e.currentTarget.style.borderColor = T.border)}
+                      />
+                      {entryProduct && (
+                        <span style={{ position: 'absolute', right: 6, fontSize: 11, color: T.muted, pointerEvents: 'none' }}>
+                          {shortUnit(entryProduct.sellingUnit)}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+
+                  {/* Price preview */}
+                  <td style={{ padding: '4px 6px', textAlign: 'right', width: 100, fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: entryLinePrice > 0 ? T.brand : T.muted, fontSize: 16 }}>
+                    {entryLinePrice > 0 ? fmt(entryLinePrice) : '—'}
+                  </td>
+
+                  {/* Notes */}
+                  <td style={{ padding: '4px 6px' }}>
+                    <input
+                      value={entryNotes}
+                      onChange={(e) => setEntryNotes(e.target.value.slice(0, 80))}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEntry(); } if (e.key === 'Escape') clearEntryRow(); }}
+                      placeholder="Note…"
+                      maxLength={80}
+                      style={{
+                        width: '100%', height: 44, fontSize: 14, padding: '0 8px',
+                        border: `1.5px solid ${T.border}`, borderRadius: 8,
+                        background: '#fff', color: T.text, outline: 'none',
+                      }}
+                      onFocus={(e) => (e.currentTarget.style.borderColor = T.brand)}
+                      onBlur={(e)  => (e.currentTarget.style.borderColor = T.border)}
+                    />
+                  </td>
+
+                  {/* Add button */}
+                  <td style={{ padding: '4px 6px', width: 44 }}>
+                    <button onClick={commitEntry}
+                      disabled={!entryProduct || !entryQtyRaw.trim()}
+                      title="Add line (Enter)"
+                      style={{
+                        width: 36, height: 44, borderRadius: 8, border: 'none', cursor: entryProduct && entryQtyRaw.trim() ? 'pointer' : 'not-allowed',
+                        background: entryProduct && entryQtyRaw.trim() ? T.brand : T.bg,
+                        color: entryProduct && entryQtyRaw.trim() ? '#fff' : T.muted,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 20, fontWeight: 700,
+                      }}>
+                      +
+                    </button>
+                  </td>
+                </tr>
+
+                {/* ── Entry row error ── */}
+                {entryError && (
+                  <tr style={{ background: '#FFF8F6' }}>
+                    <td colSpan={7} style={{ padding: '4px 10px', fontSize: 13, color: entryError.includes('adding anyway') ? T.amber : T.red, display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <AlertCircle size={13} style={{ flexShrink: 0 }} /> {entryError}
+                    </td>
+                  </tr>
+                )}
+
+                {/* ── Committed lines ── */}
+                {lines.map((line, idx) => {
+                  const lineTax   = r2(line.quantity * line.rate * (line.gstRate ?? 0) / 100);
+                  const lineTotal = r2(line.quantity * line.rate + lineTax);
+                  const avail     = (stockMap[line.productId] ?? 0) -
+                    lines.filter((l, i) => l.productId === line.productId && i < idx).reduce((s, l) => s + l.quantity, 0);
                   return (
-                    <tr key={idx} style={{ borderBottom: '1px solid #F0EAE3' }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = '#FBF6EE')} onMouseLeave={(e) => (e.currentTarget.style.background = '')}>
-                      <td style={{ padding: '8px 8px', color: '#7A6A5F', fontSize: 12, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{item.productCode ?? '—'}</td>
-                      <td style={{ padding: '8px 8px', fontWeight: 600, color: '#1F1611', maxWidth: 120 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                          <FoodDot type={item.foodType ?? 'veg'} />
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</span>
-                        </div>
-                        <div style={{ fontSize: 11, color: '#A89890', marginTop: 1 }}>per {item.unit}</div>
+                    <tr key={idx}
+                      style={{ borderBottom: `1px solid ${T.divider}`, height: 52, verticalAlign: 'middle' }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#FDFAF6')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = '')}>
+                      {/* Code */}
+                      <td style={{ padding: '0 10px', fontFamily: 'monospace', fontSize: 13, color: T.muted, whiteSpace: 'nowrap' }}>
+                        {line.productCode}
                       </td>
-                      <td style={{ padding: '8px 8px', textAlign: 'right', color: '#7A6A5F', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{fmt(item.rate)}</td>
-                      <td style={{ padding: '4px 8px', textAlign: 'right' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 3 }}>
-                          <button onClick={() => (item.unit === 'kg' ? item.quantity <= 0.25 : item.quantity <= 1) ? removeItem(idx) : updateQty(idx, -1)}
-                            style={{ width: 24, height: 24, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#EDE9E4', color: '#6B5B52', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            <Minus size={12} />
-                          </button>
-                          <span style={{ fontSize: 14, fontWeight: 700, color: '#1F1611', minWidth: 28, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
-                            {item.unit === 'kg' ? item.quantity.toFixed(2) : item.quantity}
-                          </span>
-                          <button onClick={() => updateQty(idx, 1)}
-                            style={{ width: 24, height: 24, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#EDE9E4', color: '#6B5B52', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            <Plus size={12} />
-                          </button>
+                      {/* Name + stock sub-line */}
+                      <td style={{ padding: '2px 10px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <VegDot type={line.foodType} />
+                          <span style={{ fontSize: 15, fontWeight: 600, color: T.text }}>{line.name}</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>
+                          left: {avail <= 0 ? <span style={{ color: T.red }}>out</span> : `${avail % 1 === 0 ? avail : avail.toFixed(2)} ${shortUnit(line.unit)}`}
                         </div>
                       </td>
-                      <td style={{ padding: '8px 8px', textAlign: 'right', fontWeight: 700, color: '#1F1611', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{fmt(lineTotal)}</td>
-                      <td style={{ padding: '4px 6px' }}>
-                        <button onClick={() => removeItem(idx)} aria-label="Remove" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#C0392B', display: 'flex', padding: 3, borderRadius: 5 }}>
+                      {/* Rate */}
+                      <td style={{ padding: '0 10px', textAlign: 'right', color: T.muted, fontSize: 14, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                        {fmt(line.rate)}
+                      </td>
+                      {/* Qty inline edit */}
+                      <td style={{ padding: '2px 6px', textAlign: 'right', width: 110 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 2 }}>
+                          <input
+                            value={line.unit === 'kg' ? line.quantity.toFixed(3) : line.quantity}
+                            onChange={(e) => {
+                              const v = parseFloat(e.target.value);
+                              if (!isNaN(v) && v > 0) {
+                                setLines((prev) => prev.map((l, i) => i === idx ? { ...l, quantity: r2(v) } : l));
+                              } else if (e.target.value === '' || e.target.value === '0') {
+                                if (window.confirm('Remove this item?')) {
+                                  setLines((prev) => prev.filter((_, i) => i !== idx));
+                                }
+                              }
+                            }}
+                            style={{
+                              width: 72, height: 36, fontSize: 15, padding: '0 4px',
+                              border: `1px solid ${T.border}`, borderRadius: 6,
+                              background: T.bg, color: T.text, outline: 'none',
+                              textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                            }}
+                            onFocus={(e) => { e.currentTarget.style.borderColor = T.brand; e.currentTarget.select(); }}
+                            onBlur={(e)  => (e.currentTarget.style.borderColor = T.border)}
+                          />
+                          <span style={{ fontSize: 11, color: T.muted, whiteSpace: 'nowrap' }}>{shortUnit(line.unit)}</span>
+                        </div>
+                      </td>
+                      {/* Price */}
+                      <td style={{ padding: '0 10px', textAlign: 'right', fontWeight: 700, color: T.text, fontVariantNumeric: 'tabular-nums', fontSize: 16, whiteSpace: 'nowrap' }}>
+                        {fmt(lineTotal)}
+                      </td>
+                      {/* Notes inline edit */}
+                      <td style={{ padding: '2px 6px' }}>
+                        <input
+                          value={line.notes}
+                          onChange={(e) => setLines((prev) => prev.map((l, i) => i === idx ? { ...l, notes: e.target.value.slice(0, 80) } : l))}
+                          placeholder="Note…"
+                          maxLength={80}
+                          style={{
+                            width: '100%', minWidth: 80, height: 36, fontSize: 13, padding: '0 7px',
+                            border: `1px solid ${T.border}`, borderRadius: 6,
+                            background: line.notes ? '#fff' : T.bg, color: T.text, outline: 'none',
+                          }}
+                          onFocus={(e) => (e.currentTarget.style.borderColor = T.brand)}
+                          onBlur={(e)  => (e.currentTarget.style.borderColor = T.border)}
+                        />
+                      </td>
+                      {/* Remove */}
+                      <td style={{ padding: '0 6px', width: 36 }}>
+                        <button onClick={() => setLines((prev) => prev.filter((_, i) => i !== idx))}
+                          aria-label="Remove line"
+                          style={{ width: 32, height: 32, borderRadius: 6, border: 'none', cursor: 'pointer', background: '#FDE5E0', color: T.red, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                           <X size={14} />
                         </button>
                       </td>
                     </tr>
                   );
                 })}
+
+                {/* Empty state below entry */}
+                {lines.length === 0 && (
+                  <tr>
+                    <td colSpan={7} style={{ padding: '28px 16px', textAlign: 'center', color: T.muted, fontSize: 14 }}>
+                      Type a code in the Code cell or click the Product Name cell to add items
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           )}
         </div>
 
-        {/* Totals + payment footer */}
-        <div style={{ flexShrink: 0, borderTop: '2px solid #EADFD0', padding: '10px 14px 12px', background: '#FBF6EE' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginBottom: 8 }}>
-            {discountAmount > 0 && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#7A6A5F' }}>
-                <span>Discount</span><span style={{ color: '#C0392B' }}>−{fmt(discountAmount)}</span>
+        {/* ── Totals footer + payment + buttons ── */}
+        <div style={{
+          flexShrink: 0, background: T.surface,
+          borderTop: `2px solid ${T.border}`, padding: '10px 16px 12px',
+        }}>
+          {/* Discount + tax rows */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+            <div style={{ minWidth: 280 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: T.muted, marginBottom: 2 }}>
+                <span>Subtotal</span>
+                <span style={{ fontVariantNumeric: 'tabular-nums' }}>{fmt(subtotal)}</span>
               </div>
-            )}
-            {cgst > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#7A6A5F' }}><span>CGST</span><span>{fmt(cgst)}</span></div>}
-            {sgst > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#7A6A5F' }}><span>SGST</span><span>{fmt(sgst)}</span></div>}
-            <button onClick={() => setShowDiscountInput((v) => !v)}
-              style={{ alignSelf: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', color: '#C98B4B', fontSize: 12, fontWeight: 600, padding: '2px 0', marginTop: 2 }}>
-              {showDiscountInput ? '− Hide discount' : '+ Add discount'}
-            </button>
-            {showDiscountInput && (
-              <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                <input type="number" min="0" value={discountInput} onChange={(e) => setDiscountInput(e.target.value)} placeholder="₹ amount"
-                  style={{ flex: 1, height: 34, fontSize: 14, padding: '0 10px', border: '1.5px solid #EADFD0', borderRadius: 8, background: '#fff', color: '#1F1611', outline: 'none' }}
-                  onFocus={(e) => (e.currentTarget.style.borderColor = '#E8590C')} onBlur={(e) => (e.currentTarget.style.borderColor = '#EADFD0')} />
-                <button onClick={applyDiscount} style={{ height: 34, padding: '0 14px', borderRadius: 8, background: '#E8590C', color: '#fff', border: 'none', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Apply</button>
-              </div>
-            )}
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderTop: '1px solid #EADFD0', marginBottom: 10 }}>
-            <span style={{ fontSize: 16, fontWeight: 700, color: '#1F1611' }}>Amount</span>
-            <span style={{ fontSize: 26, fontWeight: 800, color: '#E8590C', fontVariantNumeric: 'tabular-nums', fontFamily: '"DM Serif Display", serif' }}>{fmt(grandTotal)}</span>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginBottom: 8 }}>
-            {([
-              { mode: 'cash' as PayMode, Icon: Banknote,   label: 'Cash' },
-              { mode: 'upi'  as PayMode, Icon: Smartphone, label: 'UPI' },
-              { mode: 'card' as PayMode, Icon: CreditCard, label: 'Card' },
-            ] as { mode: PayMode; Icon: typeof Banknote; label: string }[]).map(({ mode, Icon, label }) => (
-              <button key={mode} onClick={() => setPaymentMode(mode)}
-                style={{ height: 42, borderRadius: 9, border: '1.5px solid', fontSize: 14, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
-                  ...(paymentMode === mode ? { background: '#E8590C', color: '#fff', borderColor: '#E8590C' } : { background: '#fff', color: '#7A6A5F', borderColor: '#EADFD0' }) }}>
-                <Icon size={15} strokeWidth={2} /> {label}
-              </button>
-            ))}
-          </div>
-
-          {paymentMode === 'cash' && (
-            <div style={{ marginBottom: 8 }}>
-              <div style={{ display: 'flex', gap: 6, marginBottom: 4 }}>
-                <input type="number" value={cashReceived} onChange={(e) => setCashReceived(e.target.value)} placeholder="Cash received"
-                  style={{ flex: 1, height: 36, fontSize: 14, padding: '0 10px', border: '1.5px solid #EADFD0', borderRadius: 8, background: '#fff', color: '#1F1611', outline: 'none' }}
-                  onFocus={(e) => (e.currentTarget.style.borderColor = '#E8590C')} onBlur={(e) => (e.currentTarget.style.borderColor = '#EADFD0')} />
-                {[0, 50, 100, 500].map((add) => (
-                  <button key={add} onClick={() => setCashReceived(add === 0 ? String(grandTotal) : String(Math.ceil(grandTotal / (add || 1)) * (add || 1)))}
-                    style={{ height: 36, padding: '0 8px', borderRadius: 8, border: '1px solid #EADFD0', background: '#fff', color: '#7A6A5F', fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                    {add === 0 ? 'Exact' : `+${add}`}
-                  </button>
-                ))}
-              </div>
-              {cashChange > 0 && (
-                <div style={{ background: '#E8F5E9', borderRadius: 8, padding: '6px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 14 }}>
-                  <span style={{ color: '#4F7F4A', fontWeight: 600 }}>Change</span>
-                  <span style={{ color: '#4F7F4A', fontWeight: 800, fontSize: 18, fontVariantNumeric: 'tabular-nums' }}>{fmt(cashChange)}</span>
+              {discountAmount > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: T.red, marginBottom: 2 }}>
+                  <span>Discount</span>
+                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>−{fmt(discountAmount)}</span>
+                </div>
+              )}
+              {cgst > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: T.muted, marginBottom: 2 }}>
+                  <span>CGST</span>
+                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>{fmt(cgst)}</span>
+                </div>
+              )}
+              {sgst > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: T.muted, marginBottom: 2 }}>
+                  <span>SGST</span>
+                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>{fmt(sgst)}</span>
+                </div>
+              )}
+              {roundOff !== 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: T.muted, marginBottom: 2 }}>
+                  <span>Round-off</span>
+                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>{roundOff > 0 ? '+' : ''}{fmt(roundOff)}</span>
                 </div>
               )}
             </div>
-          )}
+          </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 8 }}>
-            <button onClick={async () => { if (!cart.length) return; await billingApi.hold({ items: cart, orderType }); startNewBill(); }} disabled={cart.length === 0}
-              style={{ height: 48, borderRadius: 10, background: '#F0EAE3', color: '#7A6A5F', border: 'none', fontSize: 14, fontWeight: 700, cursor: cart.length > 0 ? 'pointer' : 'not-allowed', opacity: cart.length > 0 ? 1 : 0.5 }}>
-              Hold
-            </button>
-            <button onClick={handleCheckout} disabled={cart.length === 0 || submitting}
-              style={{ height: 48, borderRadius: 10, background: cart.length > 0 ? '#E8590C' : '#F0A580', color: '#fff', border: 'none', fontSize: 16, fontWeight: 800, cursor: cart.length > 0 && !submitting ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-              {submitting ? 'Processing…' : <>Pay {fmt(grandTotal)}</>}
-            </button>
+          {/* Discount toggle */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 8 }}>
+            <div>
+              {!showDiscountInput ? (
+                <button onClick={() => { setShowDiscountInput(true); setDiscountInput(discountAmount > 0 ? String(discountAmount) : ''); }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#C98B4B', fontSize: 13, fontWeight: 600, padding: 0 }}>
+                  + Add discount
+                </button>
+              ) : (
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <input type="number" min="0" value={discountInput} onChange={(e) => setDiscountInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') applyDiscount(); if (e.key === 'Escape') setShowDiscountInput(false); }}
+                    placeholder="₹ discount"
+                    style={{ width: 110, height: 34, fontSize: 14, padding: '0 8px', border: `1.5px solid ${T.border}`, borderRadius: 8, background: '#fff', color: T.text, outline: 'none' }}
+                    onFocus={(e) => (e.currentTarget.style.borderColor = T.brand)}
+                    onBlur={(e)  => (e.currentTarget.style.borderColor = T.border)}
+                  />
+                  <button onClick={applyDiscount} style={{ height: 34, padding: '0 12px', borderRadius: 8, background: T.brand, color: '#fff', border: 'none', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Apply</button>
+                  <button onClick={() => { setDiscountAmount(0); setShowDiscountInput(false); setDiscountInput(''); }}
+                    style={{ height: 34, padding: '0 10px', borderRadius: 8, background: T.bg, color: T.muted, border: `1px solid ${T.border}`, fontSize: 13, cursor: 'pointer' }}>Clear</button>
+                </div>
+              )}
+            </div>
+
+            {/* Amount total */}
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 13, color: T.muted }}>Amount</div>
+              <div style={{ fontSize: 36, fontWeight: 800, color: T.brand, fontVariantNumeric: 'tabular-nums', fontFamily: '"DM Serif Display", serif', lineHeight: 1.1 }}>
+                {fmt(grandTotal)}
+              </div>
+            </div>
+          </div>
+
+          {/* Payment row */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            {/* Payment mode buttons */}
+            <div style={{ display: 'flex', gap: 6 }}>
+              {([
+                { mode: 'cash' as PayMode, Icon: Banknote,    label: 'Cash' },
+                { mode: 'upi'  as PayMode, Icon: Smartphone,  label: 'UPI' },
+                { mode: 'card' as PayMode, Icon: CreditCard,  label: 'Card' },
+              ] as { mode: PayMode; Icon: typeof Banknote; label: string }[]).map(({ mode, Icon, label }) => (
+                <button key={mode} onClick={() => setPayMode(mode)}
+                  style={{
+                    height: 44, padding: '0 14px', borderRadius: 9, border: '1.5px solid', fontSize: 14, fontWeight: 700,
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5,
+                    background: payMode === mode ? T.brand : '#fff',
+                    color:      payMode === mode ? '#fff'   : T.muted,
+                    borderColor: payMode === mode ? T.brand : T.border,
+                  }}>
+                  <Icon size={15} strokeWidth={2} /> {label}
+                </button>
+              ))}
+            </div>
+
+            {/* Cash received */}
+            {payMode === 'cash' && (
+              <div style={{ display: 'flex', gap: 5, alignItems: 'center', flex: 1, minWidth: 220 }}>
+                <input type="number" value={cashReceived} onChange={(e) => setCashReceived(e.target.value)} placeholder="Cash received"
+                  style={{ flex: 1, minWidth: 80, height: 44, fontSize: 15, padding: '0 8px', border: `1.5px solid ${T.border}`, borderRadius: 9, background: '#fff', color: T.text, outline: 'none' }}
+                  onFocus={(e) => (e.currentTarget.style.borderColor = T.brand)}
+                  onBlur={(e)  => (e.currentTarget.style.borderColor = T.border)} />
+                {[0, 50, 100, 500].map((add) => (
+                  <button key={add}
+                    onClick={() => setCashReceived(add === 0 ? String(grandTotal) : String(Math.ceil(grandTotal / (add || 1)) * (add || 1)))}
+                    style={{ height: 44, padding: '0 8px', borderRadius: 8, border: `1px solid ${T.border}`, background: T.bg, color: T.muted, fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    {add === 0 ? 'Exact' : `+${add}`}
+                  </button>
+                ))}
+                {cashChange > 0 && (
+                  <span style={{ background: '#E8F5E9', color: T.green, borderRadius: 8, padding: '0 10px', height: 44, display: 'flex', alignItems: 'center', fontWeight: 700, fontSize: 15, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                    Change {fmt(cashChange)}
+                  </span>
+                )}
+              </div>
+            )}
+
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              {/* Hold */}
+              <button onClick={handleHold} disabled={!lines.length}
+                style={{
+                  height: 52, padding: '0 18px', borderRadius: 10, fontSize: 15, fontWeight: 700,
+                  border: `1.5px solid ${T.border}`, background: T.bg, color: T.muted,
+                  cursor: lines.length ? 'pointer' : 'not-allowed', opacity: lines.length ? 1 : 0.5,
+                }}>
+                Hold  <kbd style={{ fontSize: 11, fontFamily: 'monospace', background: T.border, borderRadius: 4, padding: '1px 4px' }}>F6</kbd>
+              </button>
+
+              {/* Pay */}
+              <div>
+                {(errorMsg || blockReasons.length > 0) && (
+                  <div style={{ fontSize: 12, color: T.red, marginBottom: 4, textAlign: 'right', maxWidth: 200 }}>
+                    {errorMsg || blockReasons[0]}
+                  </div>
+                )}
+                <button onClick={handleCheckout}
+                  disabled={blockReasons.length > 0 || submitting}
+                  style={{
+                    height: 64, minWidth: 160, padding: '0 24px', borderRadius: 10,
+                    fontSize: 20, fontWeight: 800, border: 'none',
+                    background: blockReasons.length === 0 ? T.brand : '#F0A580',
+                    color: '#fff',
+                    cursor: blockReasons.length === 0 && !submitting ? 'pointer' : 'not-allowed',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                    whiteSpace: 'nowrap',
+                  }}>
+                  {submitting ? 'Processing…' : `Pay ${fmt(grandTotal)}`}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>

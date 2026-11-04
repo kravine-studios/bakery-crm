@@ -1313,8 +1313,13 @@ export default function BillingPage() {
                         const val = e.target.value;
                         setEntryCode(val);
                         setCodeDropQuery(val);
-                        setShowCodeDrop(true);
-                        setShowNameDrop(false);   // never both at once
+                        // Only show dropdown when user has typed something
+                        if (val.trim()) {
+                          setShowCodeDrop(true);
+                          setShowNameDrop(false);
+                        } else {
+                          setShowCodeDrop(false);
+                        }
                         setEntryProduct(null);
                         setEntryQtyRaw('');
                         setEntryError('');
@@ -1332,7 +1337,7 @@ export default function BillingPage() {
                         }
                         onCodeKeyDown(e);
                       }}
-                      onFocus={() => { setShowCodeDrop(true); setShowNameDrop(false); setCodeDropQuery(entryCode); (codeRef.current as HTMLInputElement | null)?.style && ((codeRef.current as HTMLInputElement).style.borderColor = T.brand); }}
+                      onFocus={() => { setCodeDropQuery(entryCode); (codeRef.current as HTMLInputElement | null)?.style && ((codeRef.current as HTMLInputElement).style.borderColor = T.brand); }}
                       onBlur={() => { (codeRef.current as HTMLInputElement | null)?.style && ((codeRef.current as HTMLInputElement).style.borderColor = T.border); setTimeout(() => setShowCodeDrop(false), 180); }}
                       placeholder="F2 or 0=all"
                       style={{

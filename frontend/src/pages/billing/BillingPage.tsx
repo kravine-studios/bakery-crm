@@ -616,14 +616,14 @@ export default function BillingPage() {
   // ── Product name dropdown filter ───────────────────────────────────────────
   useEffect(() => {
     const q = nameQuery.toLowerCase().trim();
+    if (!q) { setNameDrop([]); setNameDropIdx(0); return; }  // nothing typed → no dropdown
     const results = products
       .filter((p) => p.isActive && (
-        !q || p.name.toLowerCase().includes(q) || p.productCode.toLowerCase().startsWith(q)
+        p.name.toLowerCase().includes(q) || p.productCode.toLowerCase().startsWith(q)
       ))
       .slice(0, 12);
     setNameDrop(results);
     setNameDropIdx(0);
-    // Do NOT auto-open here — only the Name input's onFocus opens the dropdown
   }, [nameQuery, products]);
 
   // ── Totals calculation ─────────────────────────────────────────────────────
@@ -658,15 +658,14 @@ export default function BillingPage() {
 
   useEffect(() => {
     const q = codeDropQuery.trim().toLowerCase();
-    const show = q === '' || q === '0';
+    if (!q) { setCodeDrop([]); setCodeDropIdx(0); return; }  // nothing typed → no dropdown
     const results = products
       .filter((p) => p.isActive && (
-        show || p.productCode.toLowerCase().startsWith(q) || p.name.toLowerCase().includes(q)
+        p.productCode.toLowerCase().startsWith(q) || p.name.toLowerCase().includes(q)
       ))
       .slice(0, 12);
     setCodeDrop(results);
     setCodeDropIdx(0);
-    // Visibility is controlled by Code input's onFocus/onBlur — don't touch showCodeDrop here
   }, [codeDropQuery, products]);
 
   function clearEntryRow() {
@@ -1337,7 +1336,7 @@ export default function BillingPage() {
                         }
                         onCodeKeyDown(e);
                       }}
-                      onFocus={() => { setCodeDropQuery(entryCode); (codeRef.current as HTMLInputElement | null)?.style && ((codeRef.current as HTMLInputElement).style.borderColor = T.brand); }}
+                      onFocus={() => { (codeRef.current as HTMLInputElement | null)?.style && ((codeRef.current as HTMLInputElement).style.borderColor = T.brand); }}
                       onBlur={() => { (codeRef.current as HTMLInputElement | null)?.style && ((codeRef.current as HTMLInputElement).style.borderColor = T.border); setTimeout(() => setShowCodeDrop(false), 180); }}
                       placeholder="F2 or 0=all"
                       style={{

@@ -616,7 +616,6 @@ export default function BillingPage() {
   // ── Product name dropdown filter ───────────────────────────────────────────
   useEffect(() => {
     const q = nameQuery.toLowerCase().trim();
-    // Show all products on empty query OR when code is "0" (browse-all trigger)
     const results = products
       .filter((p) => p.isActive && (
         !q || p.name.toLowerCase().includes(q) || p.productCode.toLowerCase().startsWith(q)
@@ -624,7 +623,7 @@ export default function BillingPage() {
       .slice(0, 12);
     setNameDrop(results);
     setNameDropIdx(0);
-    setShowNameDrop(results.length > 0);
+    // Do NOT auto-open here — only the Name input's onFocus opens the dropdown
   }, [nameQuery, products]);
 
   // ── Totals calculation ─────────────────────────────────────────────────────
@@ -659,7 +658,6 @@ export default function BillingPage() {
 
   useEffect(() => {
     const q = codeDropQuery.trim().toLowerCase();
-    // show all when empty/0, or filter by code prefix / name
     const show = q === '' || q === '0';
     const results = products
       .filter((p) => p.isActive && (
@@ -668,9 +666,8 @@ export default function BillingPage() {
       .slice(0, 12);
     setCodeDrop(results);
     setCodeDropIdx(0);
-    setShowCodeDrop(results.length > 0 && showCodeDrop);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [codeDropQuery, products, showCodeDrop]);
+    // Visibility is controlled by Code input's onFocus/onBlur — don't touch showCodeDrop here
+  }, [codeDropQuery, products]);
 
   function clearEntryRow() {
     setEntryCode('');
@@ -1317,10 +1314,11 @@ export default function BillingPage() {
                         setEntryCode(val);
                         setCodeDropQuery(val);
                         setShowCodeDrop(true);
+                        setShowNameDrop(false);   // never both at once
                         setEntryProduct(null);
                         setEntryQtyRaw('');
                         setEntryError('');
-                        // live preview while typing exact code
+                        // live preview if code matches exactly
                         const p = val.trim() ? lookupByCode(val.trim()) : null;
                         if (p) { setEntryProduct(p); setNameQuery(p.name); }
                       }}
@@ -1334,7 +1332,7 @@ export default function BillingPage() {
                         }
                         onCodeKeyDown(e);
                       }}
-                      onFocus={() => { setShowCodeDrop(true); setCodeDropQuery(entryCode); (codeRef.current as HTMLInputElement | null)?.style && ((codeRef.current as HTMLInputElement).style.borderColor = T.brand); }}
+                      onFocus={() => { setShowCodeDrop(true); setShowNameDrop(false); setCodeDropQuery(entryCode); (codeRef.current as HTMLInputElement | null)?.style && ((codeRef.current as HTMLInputElement).style.borderColor = T.brand); }}
                       onBlur={() => { (codeRef.current as HTMLInputElement | null)?.style && ((codeRef.current as HTMLInputElement).style.borderColor = T.border); setTimeout(() => setShowCodeDrop(false), 180); }}
                       placeholder="F2 or 0=all"
                       style={{
@@ -1380,9 +1378,9 @@ export default function BillingPage() {
                     <input
                       ref={nameRef}
                       value={nameQuery}
-                      onChange={(e) => { setNameQuery(e.target.value); setEntryProduct(null); setEntryCode(''); setEntryError(''); }}
+                      onChange={(e) => { setNameQuery(e.target.value); setShowCodeDrop(false); setEntryProduct(null); setEntryCode(''); setEntryError(''); }}
                       onKeyDown={onNameKeyDown}
-                      onFocus={() => setShowNameDrop(true)}
+                      onFocus={() => { setShowNameDrop(true); setShowCodeDrop(false); }}
                       onBlur={() => setTimeout(() => setShowNameDrop(false), 200)}
                       placeholder="Click or type name… (all on focus)"
                       style={{

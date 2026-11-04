@@ -1383,9 +1383,18 @@ export default function BillingPage() {
                     <input
                       ref={nameRef}
                       value={nameQuery}
-                      onChange={(e) => { setNameQuery(e.target.value); setShowCodeDrop(false); setEntryProduct(null); setEntryCode(''); setEntryError(''); }}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setNameQuery(val);
+                        setShowCodeDrop(false);
+                        setEntryProduct(null);
+                        setEntryCode('');
+                        setEntryError('');
+                        // Only show dropdown when user has typed something
+                        setShowNameDrop(val.trim().length > 0);
+                      }}
                       onKeyDown={onNameKeyDown}
-                      onFocus={() => { setShowNameDrop(true); setShowCodeDrop(false); }}
+                      onFocus={() => { setShowCodeDrop(false); }}
                       onBlur={() => setTimeout(() => setShowNameDrop(false), 200)}
                       placeholder="Click or type name… (all on focus)"
                       style={{
